@@ -83,13 +83,18 @@ Người dùng nâng cao có thể chỉ định wine riêng. Khi app khởi đ�
 tự dò theo thứ tự ưu tiên:
 
 ```
-1. Biến môi trường ZCALL_WINE          ← ưu tiên cao nhất
-2. Wine đã tải tự động (mục trên)      ← <userData>/zcall-wine-runtime/bin/wine
-3. Lệnh `wine` trong PATH              ← wine hệ thống (apt install wine...)
+1. Biến môi trường ZCALL_WINE          ← ưu tiên cao nhất (user tự chỉ định)
+2. Wine đã tải tự động                ← <userData>/zcall-wine-runtime/bin/wine
+                                          (bản app kiểm soát + đã test — nên
+                                          dùng để có trải nghiệm đồng nhất)
+3. Lệnh `wine` trong PATH              ← wine hệ thống (apt/dnf install wine...)
 4. Runner Bottles (flatpak)            ← ~/.var/app/com.usebottles.bottles/
                                           data/bottles/runners/kron4ek-wine-*/
                                           bin/wine (chọn bản mới nhất)
 ```
+
+App thử lần lượt từng ứng viên và chọn bản đầu tiên **chạy được app 32-bit**;
+wine hỏng tự động bỏ qua sang bản tiếp theo.
 
 Nếu không tìm thấy wine: app vẫn chạy bình thường, chỉ **không có tính năng
 gọi** — và hộp thoại hỏi tải wine ở trên sẽ xuất hiện.
@@ -104,9 +109,30 @@ gọi** — và hộp thoại hỏi tải wine ở trên sẽ xuất hiện.
 | `ZCALL_AUTO_SETUP` | `'1'` = tải wine tự động, không hỏi (dùng khi triển khai hàng loạt/script) | — |
 | `ZCALL_WINE_DOWNLOAD_URL` | Ghi đè URL tải wine portable | URL kron4ek 11.14 trên GitHub |
 
-> ⚠️ Wine cần hỗ trợ chạy app 32-bit (ZaloCall.exe là PE32). Các bản Wine 8+
-> có chế độ wow64 chạy được 32-bit trên wine64 thuần; bản cũ hơn cần
-> `dpkg --add-architecture i386` + gói wine32.
+> ⚠️ Wine cần hỗ trợ chạy app 32-bit (ZaloCall.exe là PE32). Bản wine tải
+> tự động (kron4ek classic) dùng loader 32-bit nên **máy cần thư viện 32-bit**.
+> App tự phát hiện và hiện dialog hướng dẫn đúng distro khi thiếu:
+>
+> **Ubuntu/Debian:**
+> ```bash
+> sudo dpkg --add-architecture i386 && sudo apt update
+> sudo apt install -y libc6:i386 libx11-6:i386 libfreetype6:i386 libgl1:i386 libpulse0:i386 zlib1g:i386
+> ```
+> **Fedora/RHEL:**
+> ```bash
+> sudo dnf install -y glibc.i686 libX11.i686 libXext.i686 freetype.i686 mesa-libGL.i686 pulseaudio-libs.i686 zlib-ng-compat.i686 gstreamer1.i686 gstreamer1-plugins-base.i686 gstreamer1-plugins-good.i686 gstreamer1-plugins-bad-free.i686
+> ```
+> (GStreamer 32-bit cần cho video call — nếu thiếu, video call crash trong winegstreamer.
+> `gstreamer1-plugin-libav.i686` để decode H.264 cần RPM Fusion:
+> `sudo dnf install https://download1.rpmfusion.org/free/fedora/rpmfusion-free-release-$(rpm -E %fedora).noarch.rpm` rồi `sudo dnf install gstreamer1-plugin-libav.i686`)
+> **Arch:**
+> ```bash
+> sudo pacman -S --needed lib32-glibc lib32-libx11 lib32-libxext lib32-freetype2 lib32-mesa lib32-libpulse lib32-zlib
+> ```
+> (hoặc cài wine hệ thống — `apt install wine` / `dnf install wine` /
+> `pacman -S wine` — tự kéo đủ thư viện).
+> Lưu ý: bản kron4ek **wow64** (thuần 64-bit) đã thử — không chạy được
+> ZaloCall (wow64 thử nghiệm lỗi với Qt 32-bit), nên không dùng.
 
 ### Ví dụ chạy với wine tự chọn
 

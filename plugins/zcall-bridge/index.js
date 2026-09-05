@@ -134,8 +134,14 @@ function validateWine(winePath, prefix) {
       encoding: 'utf8',
       timeout: 30000
     });
-    return res.status === 0 && /pipebridge/.test(res.stdout || '');
+    if (res.status === 0 && /pipebridge/.test(res.stdout || '')) return true;
+    console.error('[zcall-bridge] wine validation failed:',
+      'status=' + res.status,
+      'error=' + (res.error ? res.error.message : ''),
+      'stderr=' + String(res.stderr || '').split('\n').slice(0, 3).join(' | '));
+    return false;
   } catch (e) {
+    console.error('[zcall-bridge] wine validation threw:', e.message);
     return false;
   }
 }
@@ -377,6 +383,17 @@ async function promptAndInstall(userDataDir, failedWine) {
       timeout: 180000
     });
 
+    // Verify the freshly downloaded wine actually works on this machine —
+    // classic wine builds need 32-bit libraries that some systems do not
+    // have.
+    if (!validateWine(wine, prefix)) {
+      const hint = getI386InstallHint();
+      throw new Error(
+        'Wine không chạy được trên máy này — cần thư viện 32-bit.\n\n' +
+        hint.title + '\n' + hint.command
+      );
+    }
+
     progress.close();
 
     process.env.ZCALL_WINE = wine;
@@ -414,19 +431,27 @@ function launch({ userDataDir }) {
   if (process.env.ZCALL_DISABLE) return false;
 
   const prefix = process.env.ZCALL_WINEPREFIX || path.join(userDataDir, 'zcall-wine');
-  const downloadedWine = findDownloadedWine(userDataDir);
-  let wine = process.env.ZCALL_WINE || findWine() || downloadedWine;
 
   // Clean stale wine processes from unclean previous exits
   sweepStaleProcesses(prefix);
 
+  // Candidate wines, best first: explicit env -> our portable runtime
+  // (version we control and test) -> system wine -> Bottles runners.
+  const downloadedWine = findDownloadedWine(userDataDir);
+  const systemWine = findWine();
+  const candidates = [];
+  if (process.env.ZCALL_WINE) candidates.push(process.env.ZCALL_WINE);
+  if (downloadedWine) candidates.push(downloadedWine);
+  if (systemWine && candidates.indexOf(systemWine) === -1) candidates.push(systemWine);
+
+  let wine = null;
   let failedWine = null;
-  if (wine) {
+  for (const candidate of candidates) {
     // Ensure the prefix exists before validating (validation needs a booted prefix)
     if (!fs.existsSync(path.join(prefix, 'drive_c'))) {
       console.log('[zcall-bridge] initializing wine prefix:', prefix);
       try {
-        spawnSync(wine, ['wineboot', '-u'], {
+        spawnSync(candidate, ['wineboot', '-u'], {
           env: Object.assign({}, process.env, { WINEPREFIX: prefix, WINEDEBUG: '-all' }),
           stdio: 'ignore',
           timeout: 180000
@@ -436,20 +461,33 @@ function launch({ userDataDir }) {
       }
     }
 
-    // A found wine is only usable if it can run 32-bit executables. The
-    // downloaded runtime is known-good, so skip the check for it.
-    if (wine !== downloadedWine && !validateWine(wine, prefix)) {
-      console.error('[zcall-bridge] wine cannot run 32-bit apps, treating as unavailable:', wine);
-      failedWine = wine;
-      wine = null;
+    // A wine is only usable if it can run 32-bit executables.
+    if (validateWine(candidate, prefix)) {
+      wine = candidate;
+      break;
     }
+    console.error('[zcall-bridge] wine cannot run 32-bit apps, skipping:', candidate);
+    failedWine = candidate;
   }
 
   if (!wine) {
+    const cfg = readConfig(userDataDir);
+
+    // Downloaded runtime exists but cannot run (machine lacks 32-bit
+    // libraries): re-downloading would loop forever — guide the user
+    // instead, once, without nagging every launch.
+    if (failedWine === downloadedWine) {
+      console.error('[zcall-bridge] downloaded wine broken (missing 32-bit libs?)');
+      if (cfg.wineSetup !== 'broken' && process.env.ZCALL_AUTO_SETUP !== '1') {
+        writeConfig(userDataDir, { wineSetup: 'broken' });
+        showBrokenWineDialog(downloadedWine);
+      }
+      return false;
+    }
+
     // No usable wine: ask the user (async — never block the ready handler).
     // Silent only when the user ticked "không hỏi lại" on a previous
     // decline, unless ZCALL_AUTO_SETUP=1 forces a silent download.
-    const cfg = readConfig(userDataDir);
     if (cfg.wineSetup === 'declined-permanent' && process.env.ZCALL_AUTO_SETUP !== '1') {
       console.error('[zcall-bridge] wine setup declined permanently — calls unavailable');
       return false;
@@ -470,9 +508,65 @@ function launch({ userDataDir }) {
   return true;
 }
 
+/**
+ * Distro-specific command to install the 32-bit libraries the portable wine
+ * needs. Detects the distro from /etc/os-release.
+ */
+function getI386InstallHint() {
+  let idLike = '';
+  try {
+    const osRelease = fs.readFileSync('/etc/os-release', 'utf8');
+    const m = osRelease.match(/^ID(?:_LIKE)?=(.+)$/gm);
+    idLike = (m || []).join('\n').toLowerCase();
+  } catch (e) { /* unknown distro */ }
+
+  if (idLike.includes('fedora') || idLike.includes('rhel') || idLike.includes('centos')) {
+    return {
+      title: 'Cài thư viện 32-bit (Fedora/RHEL):',
+      command: 'sudo dnf install -y glibc.i686 libX11.i686 libXext.i686 freetype.i686 mesa-libGL.i686 pulseaudio-libs.i686 zlib-ng-compat.i686 gstreamer1.i686 gstreamer1-plugins-base.i686 gstreamer1-plugins-good.i686 gstreamer1-plugins-bad-free.i686\n\n(GStreamer 32-bit cần cho video call; gstreamer1-plugin-libav cần RPM Fusion)\n\nHoặc cài wine hệ thống (tự kéo đủ thư viện):\nsudo dnf install wine'
+    };
+  }
+  if (idLike.includes('arch')) {
+    return {
+      title: 'Cài thư viện 32-bit (Arch):',
+      command: 'sudo pacman -S --needed lib32-glibc lib32-libx11 lib32-libxext lib32-freetype2 lib32-mesa lib32-libpulse lib32-zlib lib32-gstreamer lib32-gst-plugins-base lib32-gst-plugins-good lib32-gst-libav\n\n(GStreamer 32-bit cần cho video call)\n\nHoặc cài wine hệ thống:\nsudo pacman -S wine'
+    };
+  }
+  // default: Debian/Ubuntu family
+  return {
+    title: 'Cài thư viện 32-bit (Ubuntu/Debian):',
+    command: 'sudo dpkg --add-architecture i386 && sudo apt update\nsudo apt install -y libc6:i386 libx11-6:i386 libfreetype6:i386 libgl1:i386 libpulse0:i386 zlib1g:i386 libgstreamer1.0-0:i386 libgstreamer-plugins-base1.0-0:i386 gstreamer1.0-plugins-good:i386 gstreamer1.0-libav:i386\n\n(GStreamer 32-bit cần cho video call)\n\nHoặc cài wine hệ thống (tự kéo đủ thư viện):\nsudo apt install wine'
+  };
+}
+
+function showBrokenWineDialog(winePath) {
+  getElectronModules();
+  if (!dialogModule) return;
+  const hint = getI386InstallHint();
+  const parent = BrowserWindowModule.getFocusedWindow() || BrowserWindowModule.getAllWindows()[0];
+  dialogModule.showMessageBox(parent, {
+    type: 'warning',
+    title: 'Zalo — Tính năng gọi điện',
+    message: 'Wine không chạy được trên máy này',
+    detail: 'Wine cần các thư viện 32-bit mà máy bạn chưa có.\n\n' +
+      hint.title + '\n' + hint.command +
+      '\n\nSau khi cài xong, khởi động lại Zalo là gọi được.\n\n' +
+      'Wine đã tải: ' + winePath
+  });
+}
+
 function openSetupDialog({ userDataDir }) {
   getElectronModules();
-  const wine = process.env.ZCALL_WINE || findWine() || findDownloadedWine(userDataDir);
+  const prefix = process.env.ZCALL_WINEPREFIX || path.join(userDataDir, 'zcall-wine');
+  const downloadedWine = findDownloadedWine(userDataDir);
+  const wine = process.env.ZCALL_WINE || findWine() || downloadedWine;
+
+  // Downloaded runtime broken? Guide instead of re-downloading forever.
+  if (wine === downloadedWine && !validateWine(wine, prefix)) {
+    showBrokenWineDialog(downloadedWine);
+    return;
+  }
+
   if (wine) {
     if (dialogModule) {
       dialogModule.showMessageBox({
