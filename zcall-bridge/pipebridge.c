@@ -135,6 +135,14 @@ static DWORD WINAPI bridgeThread(LPVOID arg) {
 
 int main(int argc, char **argv) {
     WSADATA wsa;
+
+    /* Self-test used by the Linux app to verify this wine can run 32-bit
+       executables: pipebridge.exe --version prints and exits. */
+    if (argc > 1 && strcmp(argv[1], "--version") == 0) {
+        printf("pipebridge 1\n");
+        return 0;
+    }
+
     unsigned short recvPort = (argc > 1) ? (unsigned short)atoi(argv[1]) : 29631;
     unsigned short sendPort = (argc > 2) ? (unsigned short)atoi(argv[2]) : 29632;
 

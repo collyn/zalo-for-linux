@@ -107,6 +107,48 @@ function findDownloadedWine(userDataDir) {
   return fs.existsSync(p) ? p : null;
 }
 
+/**
+ * Verify that this wine can actually run 32-bit executables (ZaloCall is a
+ * PE32 binary). Runs pipebridge.exe --version (a 32-bit exe) with a timeout.
+ * Returns true only when it prints the expected output.
+ */
+function validateWine(winePath, prefix) {
+  const pipebridgePath = path.join(__dirname, '..', '..', 'app', 'native', 'qt-call-and-cap', 'pipebridge.exe');
+  if (!fs.existsSync(pipebridgePath)) return false;
+  try {
+    const res = spawnSync(winePath, [pipebridgePath, '--version'], {
+      env: Object.assign({}, process.env, { WINEPREFIX: prefix, WINEDEBUG: '-all' }),
+      encoding: 'utf8',
+      timeout: 30000
+    });
+    return res.status === 0 && /pipebridge/.test(res.stdout || '');
+  } catch (e) {
+    return false;
+  }
+}
+
+/**
+ * Kill leftover wine processes of OUR prefix (e.g. winedevice orphans left
+ * by an unclean kill -9 of a previous session). Safe to run at launch: no
+ * legit session exists yet.
+ */
+function sweepStaleProcesses(prefix) {
+  try {
+    for (const name of ['wineserver', 'winedevice.exe']) {
+      let out = '';
+      try { out = execSync('pgrep -x ' + name, { encoding: 'utf8' }); } catch (_) { continue; }
+      for (const pid of out.trim().split('\n')) {
+        if (!pid) continue;
+        let env = '';
+        try { env = fs.readFileSync('/proc/' + pid + '/environ', 'utf8'); } catch (_) { continue; }
+        if (env.includes(prefix)) {
+          process.kill(Number(pid), 'SIGKILL');
+        }
+      }
+    }
+  } catch (_) { /* nothing stale */ }
+}
+
 // ---------------------------------------------------------------------------
 // Portable wine download + extract
 // ---------------------------------------------------------------------------
@@ -168,7 +210,7 @@ let askWindowOpen = false;
  * Custom always-on-top ask window (native dialogs can get covered by the
  * Zalo main window on Linux DEs). Resolves with the user's choice.
  */
-function showAskWindow() {
+function showAskWindow(failedWine) {
   const { ipcMain } = require('electron');
   const win = new BrowserWindowModule({
     width: 540,
@@ -183,6 +225,9 @@ function showAskWindow() {
     webPreferences: { contextIsolation: false, nodeIntegration: true }
   });
   const downloadUrl = process.env.ZCALL_WINE_DOWNLOAD_URL || WINE_DOWNLOAD_URL;
+  const headLine = failedWine
+    ? 'Wine trên máy bạn không tương thích với tính năng gọi (không chạy được ứng dụng 32-bit). Tải bản Wine tương thích?'
+    : 'Tính năng gọi điện cần Wine. Tải và bật ngay bây giờ?';
   const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
     body{font-family:sans-serif;background:#1f1f1f;color:#eee;margin:0;padding:20px 24px;-webkit-app-region:drag}
     h3{margin:0 0 8px;font-size:16px}
@@ -195,7 +240,7 @@ function showAskWindow() {
     #no{background:#3a3a3a;color:#eee}
   </style></head><body>
     <h3>Zalo — Tính năng gọi điện</h3>
-    <p>Tính năng gọi điện cần Wine. Tải và bật ngay bây giờ?<br>
+    <p>${headLine}<br>
        Sẽ tải ~54MB về lưu trong dữ liệu của Zalo — không cần quyền quản trị,
        không ảnh hưởng hệ thống.</p>
     <div id="url" title="Mở nguồn tải trong trình duyệt">Nguồn tải: ${downloadUrl}</div>
@@ -280,7 +325,7 @@ function showProgressWindow() {
   };
 }
 
-async function promptAndInstall(userDataDir) {
+async function promptAndInstall(userDataDir, failedWine) {
   getElectronModules();
   if (!BrowserWindowModule) return null;
   if (askWindowOpen) return null; // never show two ask windows
@@ -288,7 +333,7 @@ async function promptAndInstall(userDataDir) {
 
   let result;
   try {
-    result = await showAskWindow();
+    result = await showAskWindow(failedWine);
   } finally {
     askWindowOpen = false;
   }
@@ -356,36 +401,51 @@ function launch({ userDataDir }) {
   if (process.env.ZCALL_DISABLE) return false;
 
   const prefix = process.env.ZCALL_WINEPREFIX || path.join(userDataDir, 'zcall-wine');
-  const wine = process.env.ZCALL_WINE || findWine() || findDownloadedWine(userDataDir);
+  const downloadedWine = findDownloadedWine(userDataDir);
+  let wine = process.env.ZCALL_WINE || findWine() || downloadedWine;
+
+  // Clean stale wine processes from unclean previous exits
+  sweepStaleProcesses(prefix);
+
+  let failedWine = null;
+  if (wine) {
+    // Ensure the prefix exists before validating (validation needs a booted prefix)
+    if (!fs.existsSync(path.join(prefix, 'drive_c'))) {
+      console.log('[zcall-bridge] initializing wine prefix:', prefix);
+      try {
+        spawnSync(wine, ['wineboot', '-u'], {
+          env: Object.assign({}, process.env, { WINEPREFIX: prefix, WINEDEBUG: '-all' }),
+          stdio: 'ignore',
+          timeout: 180000
+        });
+      } catch (e) {
+        console.error('[zcall-bridge] wineboot failed:', e.message);
+      }
+    }
+
+    // A found wine is only usable if it can run 32-bit executables. The
+    // downloaded runtime is known-good, so skip the check for it.
+    if (wine !== downloadedWine && !validateWine(wine, prefix)) {
+      console.error('[zcall-bridge] wine cannot run 32-bit apps, treating as unavailable:', wine);
+      failedWine = wine;
+      wine = null;
+    }
+  }
 
   if (!wine) {
-    // First run with no wine anywhere: ask the user (async — never block the
-    // ready handler). Silent only when the user ticked "không hỏi lại" on a
-    // previous decline, unless ZCALL_AUTO_SETUP=1 forces a silent download.
+    // No usable wine: ask the user (async — never block the ready handler).
+    // Silent only when the user ticked "không hỏi lại" on a previous
+    // decline, unless ZCALL_AUTO_SETUP=1 forces a silent download.
     const cfg = readConfig(userDataDir);
     if (cfg.wineSetup === 'declined-permanent' && process.env.ZCALL_AUTO_SETUP !== '1') {
       console.error('[zcall-bridge] wine setup declined permanently — calls unavailable');
       return false;
     }
-    console.log('[zcall-bridge] no wine found, prompting user to set up...');
-    promptAndInstall(userDataDir).then((w) => {
+    console.log('[zcall-bridge] no usable wine, prompting user to set up...');
+    promptAndInstall(userDataDir, failedWine).then((w) => {
       if (w) console.log('[zcall-bridge] portable wine ready:', w);
     }).catch((e) => console.error('[zcall-bridge] setup failed:', e.message));
     return false;
-  }
-
-  // Ensure the prefix exists
-  if (!fs.existsSync(path.join(prefix, 'drive_c'))) {
-    console.log('[zcall-bridge] initializing wine prefix:', prefix);
-    try {
-      spawnSync(wine, ['wineboot', '-u'], {
-        env: Object.assign({}, process.env, { WINEPREFIX: prefix, WINEDEBUG: '-all' }),
-        stdio: 'ignore',
-        timeout: 180000
-      });
-    } catch (e) {
-      console.error('[zcall-bridge] wineboot failed:', e.message);
-    }
   }
 
   // Export for the patched main-dist spawn code

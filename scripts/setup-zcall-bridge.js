@@ -14,7 +14,7 @@
  */
 
 const { execSync } = require('child_process');
-const fs = require('fs');
+const fs = require('fs-extra');
 const path = require('path');
 const https = require('https');
 const logger = require('./utils/logger');
@@ -116,9 +116,10 @@ async function main() {
   logger.dim('Trimmed unneeded Qt plugins / DLLs');
 
   // -------------------------------------------------------------------------
-  // 2. pipebridge.exe (tiny C named-pipe <-> TCP pump, no runtime needed)
-  //    Prefer compiling from source with mingw; fall back to the committed
-  //    prebuilt exe (our own code, reproducible from zcall-bridge/pipebridge.c).
+  // 2. pipebridge.exe (tiny C named-pipe <-> TCP pump, no runtime needed).
+  //    Compiled from source — requires mingw on the build machine
+  //    (i686-w64-mingw32-gcc). Binaries are not committed (*.exe is
+  //    gitignored per repo policy).
   // -------------------------------------------------------------------------
   const srcC = path.join(ROOT, 'zcall-bridge', 'pipebridge.c');
   const builtExe = path.join(ROOT, 'zcall-bridge', 'pipebridge.exe');
@@ -129,7 +130,10 @@ async function main() {
       });
       logger.dim('pipebridge.exe compiled from source');
     } catch (e) {
-      logger.warn('mingw compile failed, using committed prebuilt exe if present');
+      throw new Error(
+        'mingw (i686-w64-mingw32-gcc) is required to build pipebridge.exe — ' +
+        'install it with: sudo apt install gcc-mingw-w64-i686'
+      );
     }
   }
   if (fs.existsSync(builtExe)) {

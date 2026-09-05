@@ -46,7 +46,9 @@ node scripts/setup-zcall-bridge.js
 - Tải installer Windows chính thức, tách `plugins/capture/` →
   `app/native/qt-call-and-cap/` (ZaloCall.exe + ZaviMeet.exe + Qt DLLs +
   plugins, sau khi tỉa còn ~67MB)
-- Compile `pipebridge.c` bằng mingw (fallback dùng exe đã commit)
+- Compile `pipebridge.c` bằng mingw — máy build cần
+  `gcc-mingw-w64-i686` (`sudo apt install gcc-mingw-w64-i686`); exe không
+  được commit theo chính sách repo (`*.exe` trong .gitignore)
 
 Yêu cầu: Wine chạy được 32-bit (wow64 như Wine 11). Khi app thoát, plugin
 kill toàn bộ phiên wine của prefix (`wineserver -k` + hard-kill
@@ -56,10 +58,14 @@ wineserver/winedevice còn sót).
 
 Người dùng **không cần cài gì thủ công**. Ngay lần mở app đầu tiên:
 
-1. Nếu máy chưa có wine, app hiện cửa sổ hỏi **luôn nổi trên cửa sổ chính**
-   (không bị che): *"Tính năng gọi điện cần Wine. Tải và bật ngay bây giờ?"*
-   — nút **"Tải và bật ngay"** / **"Để sau"**, kèm link nguồn tải minh bạch
-   và checkbox **"Không hỏi lại lần sau nếu không tải"**
+1. App **tự kiểm tra** wine tìm thấy có chạy được app 32-bit không (chạy thử
+   `pipebridge.exe --version` — chính là exe 32-bit của cầu nối):
+   - Wine hoạt động tốt → **dùng im lặng, không hiện dialog nào**
+   - Chưa có wine, hoặc wine có nhưng **không tương thích** (không hỗ trợ
+     32-bit / quá cũ) → hiện cửa sổ hỏi **luôn nổi trên cửa sổ chính**
+     (không bị che), kèm lý do cụ thể — nút **"Tải và bật ngay"** /
+     **"Để sau"**, link nguồn tải minh bạch và checkbox
+     **"Không hỏi lại lần sau nếu không tải"**
 2. Chọn tải → cửa sổ tiến trình *"Đang tải Wine (~54MB)…"* với % trực quan
    → tự giải nén → tự khởi tạo prefix (mất ~1-2 phút tổng cộng)
 3. Xong → thông báo *"Tính năng gọi điện đã sẵn sàng!"* — gọi được ngay,
