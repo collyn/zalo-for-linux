@@ -107,32 +107,102 @@ gọi** — và hộp thoại hỏi tải wine ở trên sẽ xuất hiện.
 | `ZCALL_WINEPREFIX` | Prefix wine dành riêng cho app | `<userData>/zcall-wine` |
 | `ZCALL_DISABLE` | Set bất kỳ giá trị nào để tắt hẳn tính năng gọi | — |
 | `ZCALL_AUTO_SETUP` | `'1'` = tải wine tự động, không hỏi (dùng khi triển khai hàng loạt/script) | — |
-| `ZCALL_WINE_DOWNLOAD_URL` | Ghi đè URL tải wine portable | URL kron4ek 8.6 trên GitHub |
+| `ZCALL_WINE_DOWNLOAD_URL` | Ghi đè URL tải wine portable | URL kron4ek 11.14 trên GitHub |
 
-> ⚠️ Wine cần hỗ trợ chạy app 32-bit (ZaloCall.exe là PE32). Bản wine tải
-> tự động (kron4ek classic) dùng loader 32-bit nên **máy cần thư viện 32-bit**.
-> App tự phát hiện và hiện dialog hướng dẫn đúng distro khi thiếu:
->
-> **Ubuntu/Debian:**
-> ```bash
-> sudo dpkg --add-architecture i386 && sudo apt update
-> sudo apt install -y libc6:i386 libx11-6:i386 libfreetype6:i386 libgl1:i386 libpulse0:i386 libasound2:i386 libv4l-0:i386 zlib1g:i386 libgstreamer1.0-0:i386 libgstreamer-plugins-base1.0-0:i386 gstreamer1.0-plugins-good:i386 gstreamer1.0-libav:i386
-> ```
-> **Fedora/RHEL:**
-> ```bash
-> sudo dnf install -y glibc.i686 libX11.i686 libXext.i686 freetype.i686 mesa-libGL.i686 pulseaudio-libs.i686 alsa-lib.i686 libv4l.i686 zlib-ng-compat.i686 gstreamer1.i686 gstreamer1-plugins-base.i686 gstreamer1-plugins-good.i686 gstreamer1-plugins-bad-free.i686
-> ```
-> (GStreamer 32-bit cần cho video call — nếu thiếu, video call crash trong winegstreamer.
-> `gstreamer1-plugin-libav.i686` để decode H.264 cần RPM Fusion:
-> `sudo dnf install https://download1.rpmfusion.org/free/fedora/rpmfusion-free-release-$(rpm -E %fedora).noarch.rpm` rồi `sudo dnf install gstreamer1-plugin-libav.i686`)
-> **Arch:**
-> ```bash
-> sudo pacman -S --needed lib32-glibc lib32-libx11 lib32-libxext lib32-freetype2 lib32-mesa lib32-libpulse lib32-alsa-lib lib32-libv4l lib32-zlib lib32-gstreamer lib32-gst-plugins-base lib32-gst-plugins-good lib32-gst-libav
-> ```
-> (hoặc cài wine hệ thống — `apt install wine` / `dnf install wine` /
-> `pacman -S wine` — tự kéo đủ thư viện).
-> Lưu ý: bản kron4ek **wow64** (thuần 64-bit) đã thử — không chạy được
-> ZaloCall (wow64 thử nghiệm lỗi với Qt 32-bit), nên không dùng.
+## Cài thư viện cho từng distro (copy-paste)
+
+Bản wine tải tự động (kron4ek classic) dùng loader 32-bit nên **máy cần thư
+viện 32-bit**. Có 2 mức:
+
+- **Tối thiểu (gọi thoại — loa + mic)**: base libs + driver âm thanh
+- **Đầy đủ (thoại + video)**: thêm GStreamer + libv4l
+
+App cũng tự hiện dialog hướng dẫn đúng distro khi thiếu.
+
+### Ubuntu / Debian
+
+```bash
+sudo dpkg --add-architecture i386 && sudo apt update
+
+# Tối thiểu — gọi thoại
+sudo apt install -y libc6:i386 libx11-6:i386 libxext6:i386 libfreetype6:i386 \
+  libgl1:i386 libpulse0:i386 libasound2:i386 zlib1g:i386
+
+# Đầy đủ — thêm cho video call
+sudo apt install -y libgstreamer1.0-0:i386 libgstreamer-plugins-base1.0-0:i386 \
+  gstreamer1.0-plugins-good:i386 libv4l-0:i386
+
+# Khuyến nghị — decode H.264 video từ đầu bên kia
+sudo apt install -y gstreamer1.0-libav:i386
+```
+
+### Fedora / RHEL
+
+```bash
+# Tối thiểu — gọi thoại
+sudo dnf install -y glibc.i686 libX11.i686 libXext.i686 freetype.i686 \
+  mesa-libGL.i686 pulseaudio-libs.i686 alsa-lib.i686 zlib-ng-compat.i686
+
+# Đầy đủ — thêm cho video call
+sudo dnf install -y gstreamer1.i686 gstreamer1-plugins-base.i686 \
+  gstreamer1-plugins-good.i686 libv4l.i686
+
+# Khuyến nghị — decode H.264 (cần RPM Fusion)
+sudo dnf install https://download1.rpmfusion.org/free/fedora/rpmfusion-free-release-$(rpm -E %fedora).noarch.rpm
+sudo dnf install gstreamer1-plugin-libav.i686
+```
+
+### Arch
+
+```bash
+# Tối thiểu — gọi thoại
+sudo pacman -S --needed lib32-glibc lib32-libx11 lib32-libxext \
+  lib32-freetype2 lib32-mesa lib32-libpulse lib32-alsa-lib lib32-zlib
+
+# Đầy đủ — thêm cho video call
+sudo pacman -S --needed lib32-gstreamer lib32-gst-plugins-base \
+  lib32-gst-plugins-good lib32-libv4l
+
+# Khuyến nghị — decode H.264
+sudo pacman -S --needed lib32-gst-libav
+```
+
+> `gstreamer1.0-plugins-bad` (Ubuntu) / `gstreamer1-plugins-bad-free` (Fedora)
+> chỉ cần khi không dùng libav — không bắt buộc nếu đã cài libav.
+
+### Đường tắt: cài wine hệ thống
+
+`sudo apt install wine` / `sudo dnf install wine` / `sudo pacman -S wine` —
+trình quản lý gói tự kéo đủ thư viện. App tự phát hiện và dùng wine hệ thống.
+
+### Kiểm tra sau khi cài
+
+```bash
+# Mic được hệ thống nhận chưa?
+pactl list sources short | grep -i input
+# Loa?
+pactl list sinks short
+# Camera?
+ls /dev/video*          # rỗng = chưa nhận phần cứng; thiếu quyền: sudo usermod -aG video $USER
+```
+
+### Camera bị xanh/nhòe (lệch định dạng pixel)
+
+Cài công cụ điều khiển camera (`sudo apt install v4l-utils` /
+`sudo dnf install v4l-utils` / `sudo pacman -S v4l-utils`) rồi ép format:
+
+```bash
+v4l2-ctl --set-fmt-video=width=640,height=480,pixelformat=MJPG
+```
+
+(hết hiệu lực khi rút cắm camera)
+
+### Lưu ý giới hạn
+
+- Bản kron4ek **wow64** (thuần 64-bit) không chạy được ZaloCall — không dùng.
+- **Share screen chỉ hoạt động trên phiên X11** (GNOME on Xorg / Plasma X11);
+  trên Wayland, XWayland không nhìn thấy desktop nên màn hình chia sẻ trống —
+  giới hạn chung của Wine trên Wayland, không có cách xử lý từ phía app.
 
 ### Ví dụ chạy với wine tự chọn
 
