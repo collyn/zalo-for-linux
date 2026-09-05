@@ -8,6 +8,8 @@
  *      app/native/qt-call-and-cap/, then trims unneeded files
  *   2. Compiles pipebridge.c (252KB named-pipe <-> TCP pump, no runtime
  *      needed) with mingw, falling back to the committed prebuilt exe
+ *   3. Compiles streamproxy.c (LD_PRELOAD shim that redirects ZaloCall's
+ *      screen-capture reads to the Wayland bridge display) with gcc
  *
  * No proprietary binaries are committed to this repository — everything is
  * fetched from official sources at setup time (same policy as the macOS DMG).
@@ -144,6 +146,30 @@ async function main() {
     logger.success('pipebridge.exe installed');
   } else {
     logger.warn('pipebridge.exe missing — build it with: i686-w64-mingw32-gcc zcall-bridge/pipebridge.c -lws2_32 -O2 -o zcall-bridge/pipebridge.exe');
+  }
+
+  // -------------------------------------------------------------------------
+  // 3. streamproxy.so (LD_PRELOAD shim that redirects ZaloCall's
+  //    screen-capture reads to the bridge display). MUST be 32-bit: ZaloCall
+  //    is a 32-bit app, so its winex11 driver binds the 32-bit libX11 —
+  //    a 64-bit shim would never intercept anything.
+  // -------------------------------------------------------------------------
+  const proxySrc = path.join(ROOT, 'zcall-bridge', 'streamproxy.c');
+  const proxySo = path.join(ROOT, 'zcall-bridge', 'streamproxy.so');
+  if (fs.existsSync(proxySrc)) {
+    try {
+      execSync(`gcc -m32 -shared -fPIC -O2 "${proxySrc}" -ldl -lX11 -lxcb -o "${proxySo}"`, {
+        cwd: ROOT, stdio: 'pipe'
+      });
+      logger.dim('streamproxy.so (32-bit) compiled from source');
+    } catch (e) {
+      throw new Error(
+        '32-bit build toolchain is required for streamproxy.so — ' +
+        'install with: sudo apt install gcc-multilib libx11-dev:i386 libxcb1-dev:i386'
+      );
+    }
+  } else {
+    logger.warn('streamproxy.c missing — share screen will not work on Wayland');
   }
 
   logger.success('call-v2 runtime ready: ' + TARGET);

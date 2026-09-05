@@ -599,8 +599,48 @@ function launch({ userDataDir }) {
   process.env.ZCALL_WINEPREFIX = prefix;
   if (!process.env.WINEDEBUG) process.env.WINEDEBUG = '-all';
 
+  // Streamproxy: the capture shim is preloaded into the helper at ALL times.
+  // It is inert while the bridge display is down (captures fall through to
+  // the real display) and it signals a share request via a file, which the
+  // watcher below turns into an automatic bridge start — no tray click
+  // needed when the user hits "Share screen".
+  const proxySo = path.join(__dirname, '..', '..', 'zcall-bridge', 'streamproxy.so');
+  if (fs.existsSync(proxySo)) {
+    process.env.ZCALL_PROXY_SO = proxySo;
+    process.env.ZCALL_PROXY_LOG = path.join(os.homedir(), '.config', 'ZaloData', 'zcall-proxy.log');
+    process.env.ZCALL_PROXY_REQUEST = path.join(os.homedir(), '.config', 'ZaloData', 'zcall-share.request');
+    // Warm the resolution cache now so the first share-screen request does
+    // not pay the synchronous xrandr call while the user waits.
+    try {
+      const out = execSync('xrandr --query 2>/dev/null | grep -m1 "\\*" | awk \'{print $1}\'', { encoding: 'utf8' });
+      if (/^\d+x\d+$/.test(out.trim())) cachedBridgeRes = out.trim();
+    } catch (e) { /* default */ }
+    watchShareRequests();
+  }
+
   console.log('[zcall-bridge] wine ready:', wine, '(prefix:', prefix + ')');
   return true;
+}
+
+/**
+ * Watches the share-request file touched by the streamproxy shim when
+ * ZaloCall starts capturing while the bridge display is down. Starting the
+ * bridge pops the compositor's permission dialog automatically.
+ */
+let lastAutoBridgeAt = 0;
+function watchShareRequests() {
+  setInterval(() => {
+    const f = process.env.ZCALL_PROXY_REQUEST;
+    if (!f || !fs.existsSync(f)) return;
+    try { fs.unlinkSync(f); } catch (e) { /* gone */ }
+    if (!isWaylandSession() || screenBridgeActive()) return;
+    // Cooldown: if the user denied the portal, don't nag again right away
+    // (the tray menu remains available for a manual retry).
+    if (Date.now() - lastAutoBridgeAt < 90000) return;
+    lastAutoBridgeAt = Date.now();
+    debugLog('screenbridge: share request detected — starting bridge');
+    startScreenBridge();
+  }, 200);
 }
 
 /**
@@ -937,6 +977,142 @@ function shutdown() {
   const prefix = process.env.ZCALL_WINEPREFIX;
   if (!prefix) return;
   killWineSession(prefix);
+  stopScreenBridge();
+}
+
+// ---------------------------------------------------------------------------
+// Wayland screen-share bridge
+//
+// On Wayland, wine's X11 screen capture cannot see the desktop (XWayland is
+// isolated). This bridge renders the Wayland screen into a headless Xvfb
+// display via the XDG ScreenCast portal. ZaloCall keeps running natively on
+// the real display; the streamproxy.so shim (LD_PRELOAD, preloaded via
+// ZCALL_PROXY_SO in the patched spawn env) redirects its screen-capture
+// reads (XGetImage/XShmGetImage/xcb_get_image on the root) to the bridge
+// display, so "share screen" captures the bridged content while the call UI
+// stays a normal window. The shim also touches a request file when a
+// capture starts while the bridge is down — watchShareRequests() turns that
+// into an automatic bridge start, so the compositor's permission dialog
+// pops by itself when the user hits "Share screen".
+// ---------------------------------------------------------------------------
+
+const BRIDGE_DISPLAY = ':99';
+let bridgeProcs = [];
+let bridgeGranted = false;
+let cachedBridgeRes = null;
+
+function isWaylandSession() {
+  return process.env.XDG_SESSION_TYPE === 'wayland';
+}
+
+function screenBridgeActive() {
+  return bridgeProcs.some((p) => p && p.exitCode === null && !p.killed);
+}
+
+function startScreenBridge() {
+  getElectronModules();
+  if (screenBridgeActive()) {
+    if (dialogModule) {
+      dialogModule.showMessageBox({
+        type: 'info',
+        title: 'Zalo — Chia sẻ màn hình',
+        message: 'Bridge đang hoạt động',
+        detail: 'Màn hình ảo ' + BRIDGE_DISPLAY + ' đã sẵn sàng. Cuộc gọi hoạt động hoàn toàn như bình thường — khi bấm Share screen, hình chia sẻ sẽ được lấy từ màn hình thật qua bridge.'
+      });
+    }
+    return true;
+  }
+
+  const pyPath = path.join(__dirname, '..', '..', 'zcall-bridge', 'screenbridge.py');
+  if (!fs.existsSync(pyPath)) {
+    if (dialogModule) {
+      dialogModule.showMessageBox({
+        type: 'error', title: 'Zalo — Chia sẻ màn hình',
+        message: 'Thiếu thành phần bridge',
+        detail: 'Không tìm thấy screenbridge.py tại:\n' + pyPath
+      });
+    }
+    return false;
+  }
+
+  // streamproxy.so (LD_PRELOAD shim) redirects ZaloCall's screen-capture
+  // reads from the real display root to the bridge display, so the call UI
+  // stays 100% native while "share screen" captures the bridged stream.
+  // It is compiled by scripts/setup-zcall-bridge.js.
+  const proxySoPath = path.join(__dirname, '..', '..', 'zcall-bridge', 'streamproxy.so');
+  if (!fs.existsSync(proxySoPath)) {
+    if (dialogModule) {
+      dialogModule.showMessageBox({
+        type: 'error', title: 'Zalo — Chia sẻ màn hình',
+        message: 'Thiếu thành phần streamproxy',
+        detail: 'Không tìm thấy streamproxy.so tại:\n' + proxySoPath +
+          '\n\nChạy "node scripts/setup-zcall-bridge.js" để build lại.'
+      });
+    }
+    return false;
+  }
+
+  // Resolve the real screen resolution for the Xvfb screen. Cached from app
+  // launch — the synchronous xrandr call would add ~200ms of latency right
+  // when the user is waiting for the permission dialog.
+  let res = cachedBridgeRes;
+  if (!res) {
+    res = '1920x1080';
+    try {
+      const out = execSync('xrandr --query 2>/dev/null | grep -m1 "\\*" | awk \'{print $1}\'', { encoding: 'utf8' });
+      if (/^\d+x\d+$/.test(out.trim())) res = out.trim();
+    } catch (e) { /* default */ }
+    cachedBridgeRes = res;
+  }
+  const [w, h] = res.split('x');
+
+  stopScreenBridge();
+  bridgeGranted = false;
+  try {
+    // Headless Xvfb holds the bridged stream; ZaloCall keeps running on the
+    // real display (native UI) and the streamproxy shim redirects its
+    // screen-capture reads to this display.
+    bridgeProcs.push(spawn('Xvfb', [BRIDGE_DISPLAY, '-screen', '0', w + 'x' + h + 'x24'], { stdio: 'ignore' }));
+    const py = spawn('python3', [pyPath, BRIDGE_DISPLAY], { stdio: ['ignore', 'ignore', 'pipe'] });
+    py.stderr.on('data', (d) => {
+      const s = String(d).trim().slice(0, 300);
+      debugLog('screenbridge: ' + s);
+      // The user granted the portal and gst is rendering into :99 — from
+      // now on the shim's proxied grabs return the stream. (The helper is
+      // never restarted: the shim is preloaded from app launch, and its
+      // fall-through handles the bridge-down state.)
+      if (s.indexOf('got pipewire node') !== -1) {
+        bridgeGranted = true;
+        debugLog('screenbridge: granted — stream ready on ' + BRIDGE_DISPLAY);
+      }
+    });
+    py.on('exit', (code) => {
+      debugLog('screenbridge: python exited code=' + code + ' granted=' + bridgeGranted);
+      stopScreenBridge();
+    });
+    bridgeProcs.push(py);
+    // Let gst create its window, then stretch every window on the Xvfb
+    // display over the whole screen (the gst window title is
+    // "gst-launch-1.0", so match anything).
+    setTimeout(() => {
+      try {
+        execSync(`xdotool search --display ${BRIDGE_DISPLAY} "" 2>/dev/null | while read wid; do xdotool windowsize $wid ${w} ${h} windowmove $wid 0 0; done`, { stdio: 'ignore' });
+      } catch (e) { debugLog('screenbridge xdotool: ' + e.message); }
+    }, 5000);
+  } catch (e) {
+    debugLog('screenbridge start failed: ' + e.message);
+    return false;
+  }
+
+  debugLog('screenbridge started on ' + BRIDGE_DISPLAY + ' res=' + res);
+  return true;
+}
+
+function stopScreenBridge() {
+  for (const p of bridgeProcs) {
+    try { if (p && !p.killed) p.kill(); } catch (e) { /* gone */ }
+  }
+  bridgeProcs = [];
 }
 
 module.exports = {

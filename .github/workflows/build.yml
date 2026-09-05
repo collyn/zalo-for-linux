@@ -64,8 +64,9 @@ jobs:
 
     - name: Install system build dependencies
       run: |
+        sudo dpkg --add-architecture i386
         sudo apt-get update
-        sudo apt-get install -y liblzma-dev p7zip-full gcc-mingw-w64-i686
+        sudo apt-get install -y liblzma-dev p7zip-full gcc-mingw-w64-i686 gcc gcc-multilib libx11-dev libxcb1-dev libx11-dev:i386 libxcb1-dev:i386
 
     - name: Setup and Build
       id: build

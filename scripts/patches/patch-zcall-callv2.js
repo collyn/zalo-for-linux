@@ -44,10 +44,14 @@ const REPLACEMENTS = [
     from: 'e=o.join(e,"Contents","MacOS","ZaloCall")),e}();',
     to: 'e=o.join(e,"Contents","MacOS","ZaloCall"))),e}();',
   },
-  // 3. spawn: on Linux, start pipebridge then ZaloCall under Wine
+  // 3. spawn: on Linux, start pipebridge then ZaloCall under Wine.
+  //    NOTE: `from` is anchored with the leading `;` so it cannot re-match
+  //    inside this replacement's own else branch (which keeps the original
+  //    text) — without the anchor, every re-run of the patch script nests
+  //    another dead linux branch into the ternary.
   {
-    from: 'A=i(e,[v,g]),A.stdout.setEncoding("utf8")',
-    to: '"linux"===process.platform?(i(process.env.ZCALL_WINE||"wine",[o.join(__dirname,"..","native","qt-call-and-cap","pipebridge.exe"),"29631","29632"]),A=i(process.env.ZCALL_WINE||"wine",[e,"\\\\\\\\.\\\\pipe\\\\PipeZCallRecv","\\\\\\\\.\\\\pipe\\\\PipeZCallSend"])):A=i(e,[v,g]),A.stdout.setEncoding("utf8")',
+    from: ';A=i(e,[v,g]),A.stdout.setEncoding("utf8")',
+    to: ';"linux"===process.platform?(i(process.env.ZCALL_WINE||"wine",[o.join(__dirname,"..","native","qt-call-and-cap","pipebridge.exe"),"29631","29632"]),A=i(process.env.ZCALL_WINE||"wine",[e,"\\\\\\\\.\\\\pipe\\\\PipeZCallRecv","\\\\\\\\.\\\\pipe\\\\PipeZCallSend"])):A=i(e,[v,g]),A.stdout.setEncoding("utf8")',
   },
   // 4. listen: TCP on Linux, unix socket elsewhere
   {
@@ -102,6 +106,13 @@ const REPLACEMENTS = [
     from: 'i(process.env.ZCALL_WINE||"wine",[o.join(__dirname,"..","native","qt-call-and-cap","pipebridge.exe"),"29631","29632"]),A=i(process.env.ZCALL_WINE||"wine"',
     to: 'TK="zcall-"+Math.random().toString(36).slice(2)+Date.now().toString(36),i(process.env.ZCALL_WINE||"wine",[o.join(__dirname,"..","native","qt-call-and-cap","pipebridge.exe"),"29631","29632",TK]),A=i(process.env.ZCALL_WINE||"wine"',
   },
+  // 10. Wayland screen-share bridge: preload the streamproxy shim (when the
+  //     plugin set ZCALL_PROXY_SO) so ZaloCall's screen-capture reads are
+  //     served from the bridge display while the app itself stays native.
+  {
+    from: '[e,"\\\\\\\\.\\\\pipe\\\\PipeZCallRecv","\\\\\\\\.\\\\pipe\\\\PipeZCallSend"]))',
+    to: '[e,"\\\\\\\\.\\\\pipe\\\\PipeZCallRecv","\\\\\\\\.\\\\pipe\\\\PipeZCallSend"],{env:Object.assign({},process.env,{LD_PRELOAD:process.env.ZCALL_PROXY_SO||process.env.LD_PRELOAD||""})}))',
+  },
   {
     from: 'e.on("data",(e=>{z(e)})),e.on("end"',
     to: 'e.on("data",(n=>{if(!e.t){e.t=!0;const t=n.toString();if(t.indexOf(TK)!==0)return e.destroy();n=t.slice(TK.length+1)}z(n)})),e.on("end"',
@@ -109,6 +120,43 @@ const REPLACEMENTS = [
   {
     from: 'e.on("data",(t=>{d.zsymb(4,"VafRm1",["serverSend on data","ySFwkp"],t),y||(F=!1,W(e))}))',
     to: 'e.on("data",(t=>{if(!e.t){e.t=!0;const i=t.toString();if(i.indexOf(TK)!==0)return e.destroy();t=i.slice(TK.length+1)}d.zsymb(4,"VafRm1",["serverSend on data","ySFwkp"],t),y||(F=!1,W(e))}))',
+  },
+  // 11. Helper restart support. The Wayland screen bridge restarts ZaloCall
+  //     mid-session (DISPLAY is read at spawn time), so the helper must be
+  //     able to die and come back: reset L on exit, and spawn pipebridge
+  //     (which owns the auth token) only ONCE per session — pipebridge
+  //     re-creates the pipes itself and waits for the next ZaloCall.
+  //     (BB, not B: the module already declares B.)
+  {
+    from: 'F=!1,U=!1,TK=null',
+    to: 'F=!1,U=!1,TK=null,BB=!1',
+  },
+  {
+    from: 'TK="zcall-"+Math.random().toString(36).slice(2)+Date.now().toString(36),i(process.env.ZCALL_WINE||"wine",[o.join(__dirname,"..","native","qt-call-and-cap","pipebridge.exe"),"29631","29632",TK]),A=i(process.env.ZCALL_WINE||"wine"',
+    to: 'BB||(BB=!0,TK="zcall-"+Math.random().toString(36).slice(2)+Date.now().toString(36),i(process.env.ZCALL_WINE||"wine",[o.join(__dirname,"..","native","qt-call-and-cap","pipebridge.exe"),"29631","29632",TK])),A=i(process.env.ZCALL_WINE||"wine"',
+  },
+  {
+    from: 'A.on("error",(e=>{L=!1,d.zsymb(22,"4OM2ud",["client error","6Br8Rv"],e)}))',
+    to: 'A.on("error",(e=>{L=!1,d.zsymb(22,"4OM2ud",["client error","6Br8Rv"],e)})),A.on("exit",(()=>{L=!1}))',
+  },
+  // 12. Queue sends while the helper is restarting instead of writing to a
+  //     destroyed socket (unhandled socket error would crash the main
+  //     process). The queue is flushed when pipebridge reconnects (token
+  //     line below) or after each helper message.
+  {
+    from: 'D=t=>{y?V(e,t):G(e,t)',
+    // No trailing `}`: D is the last statement of the connection callback
+    // and the original `}}))` closes D, the callback and C.on( — adding a
+    // brace here breaks the bundle syntax.
+    to: 'D=t=>{y?V(e,t):e&&!e.destroyed?G(e,t):x.push(t)',
+  },
+  {
+    from: 't=i.slice(TK.length+1)}d.zsymb(4,"VafRm1",["serverSend on data","ySFwkp"],t),y||(F=!1,W(e))',
+    to: 't=i.slice(TK.length+1)}W(e),d.zsymb(4,"VafRm1",["serverSend on data","ySFwkp"],t),y||(F=!1,W(e))',
+  },
+  {
+    from: 'else if(e){if(x.length){const t=x.shift();$(e,t)',
+    to: 'else if(e&&!e.destroyed){if(x.length){const t=x.shift();$(e,t)',
   },
 ];
 

@@ -197,12 +197,43 @@ v4l2-ctl --set-fmt-video=width=640,height=480,pixelformat=MJPG
 
 (hết hiệu lực khi rút cắm camera)
 
+### Share screen trên Wayland (bridge)
+
+Trên Wayland, XWayland không nhìn thấy desktop nên ZaloCall (wine) chụp được
+màn hình đen. App có sẵn **bridge riêng**:
+
+1. Cài thành phần (một lần):
+   ```bash
+   # Fedora:  sudo dnf install xorg-x11-server-Xvfb xdotool python3-dbus
+   # Ubuntu:  sudo apt install xvfb xdotool python3-dbus
+   # Arch:    sudo pacman -S xorg-server-xvfb xdotool python-dbus
+   ```
+   (`streamproxy.so` được build sẵn vào app — không cần cài gì thêm.)
+2. Gọi video **hoàn toàn như bình thường** — giao diện cuộc gọi là cửa sổ
+   native trên desktop, không có gì thay đổi
+3. Bấm **Share screen** như thường → **hộp thoại xin quyền ghi màn hình
+   (portal chuẩn) tự hiện ra** → chọn màn hình → Cho phép → hình chia sẻ
+   được lấy từ màn hình Wayland thật qua bridge ✓
+
+Bridge chạy **Xvfb headless** làm màn hình render (`:99`): màn hình Wayland
+được đưa vào đó qua XDG ScreenCast portal + GStreamer. ZaloCall **vẫn chạy
+native trên màn hình thật**; `streamproxy.so` (shim LD_PRELOAD, build sẵn
+theo app) chặn đúng các lời gọi chụp màn hình của ZaloCall
+(`XGetImage`/`XShmGetImage`/`xcb_get_image` trên root) và **trả về nội dung
+từ `:99`** — nên phần còn lại của app (giao diện, âm thanh, video) không
+đổi, chỉ riêng hình ảnh chia sẻ đi qua bridge. Shim cũng **tự báo hiệu**
+(bằng file request) khi phát hiện lần chụp màn hình đầu tiên — app theo
+dõi và tự khởi động bridge, nên không cần thao tác nào thêm. Nếu người
+dùng từ chối hộp thoại quyền, app không hỏi lại trong 90 giây (bấm lại Share
+screen để thử lại). Bridge tự tắt khi thoát app.
+
+Trên **phiên X11**, share screen hoạt động trực tiếp — không cần bridge.
+
 ### Lưu ý giới hạn
 
 - Bản kron4ek **wow64** (thuần 64-bit) không chạy được ZaloCall — không dùng.
-- **Share screen chỉ hoạt động trên phiên X11** (GNOME on Xorg / Plasma X11);
-  trên Wayland, XWayland không nhìn thấy desktop nên màn hình chia sẻ trống —
-  giới hạn chung của Wine trên Wayland, không có cách xử lý từ phía app.
+- Công cụ xwaylandvideobridge của KDE chỉ chạy trên KDE Plasma (KWin); trên
+  GNOME dùng bridge tích hợp của app (mục trên).
 
 ### Ví dụ chạy với wine tự chọn
 
@@ -271,11 +302,12 @@ rm -rf /tmp/test-prefix
   thiếu hàm CRT khi gặp lỗi decode), **8.0.1**, **7.22**
 - ✅ **Video call hoạt động** trên Fedora (wine 11.14 + GStreamer 32-bit +
   libv4l) — camera đôi khi cần ép format: `v4l2-ctl --set-fmt-video=width=640,height=480,pixelformat=MJPG`
-- ⚠️ **Share screen không hoạt động trên Wayland** — wine chỉ capture qua
-  X11/XWayland, và XWayland không nhìn thấy desktop Wayland. Cần đăng nhập
-  phiên X11 (GNOME on Xorg / Plasma X11) để dùng tính năng này. Đây là giới
-  hạn chung của phần mềm Windows qua Wine trên Wayland, không có cách xử lý
-  từ phía app.
+- ✅ **Share screen trên Wayland** qua bridge tích hợp (XDG ScreenCast
+  portal → PipeWire → GStreamer → Xvfb headless `:99` → streamproxy shim
+  32-bit → ZaloCall) — **người dùng xác nhận share hoạt động** trên KDE
+  Wayland; ZaloCall chạy native, giao diện cuộc gọi không đổi; hộp thoại
+  quyền tự hiện khi bấm Share screen (shim báo hiệu qua file request)
+- ⚠️ Trên phiên X11 không cần bridge — share screen hoạt động trực tiếp.
 - ✅ `native-ready` → `init` → `makeCall` → `callState: incall`, `show success`,
   `sendSignal 401` — engine thực hiện cuộc gọi thật (voice + video signaling)
 - ✅ **Người dùng xác nhận cuộc gọi thoại hoạt động** trong app
