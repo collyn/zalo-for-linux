@@ -22,6 +22,11 @@ async function main() {
 
       logger.step('Step 4: Preparing Zalo app');
       await require('./prepare-app.js').main();
+
+      // Optional: call engine under Wine — failure must not break the build.
+      logger.step('Step 4.5: Setting up zcall-bridge (optional call engine)');
+      try { await require('./setup-zcall-bridge.js').main(); }
+      catch (e) { logger.warn('zcall-bridge setup failed, calls unavailable: ' + e.message); }
     }
     if (process.env.BUILD === 'true') {
       logger.step('Step 5: Building AppImages');

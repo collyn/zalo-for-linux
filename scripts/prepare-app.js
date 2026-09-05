@@ -178,6 +178,12 @@ async function extractAppAsar() {
   const { main: patchZjxl } = require('./patches/patch-zjxl');
   await patchZjxl();
 
+  const { main: patchZcallCallgate } = require('./patches/patch-zcall-callgate');
+  await patchZcallCallgate();
+
+  const { main: patchZcallCallv2 } = require('./patches/patch-zcall-callv2');
+  await patchZcallCallv2();
+
   // const { main: patchFixImageResizeLinux } = require('./patches/patch-fix-image-resize-linux');
   // await patchFixImageResizeLinux();
 
