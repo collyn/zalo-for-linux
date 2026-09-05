@@ -112,9 +112,22 @@ function findDownloadedWine(userDataDir) {
  * PE32 binary). Runs pipebridge.exe --version (a 32-bit exe) with a timeout.
  * Returns true only when it prints the expected output.
  */
+function findPipebridgePath() {
+  const candidates = [
+    // packaged app: app/ is an extraFile next to the asar
+    path.join(process.resourcesPath || '', 'app', 'native', 'qt-call-and-cap', 'pipebridge.exe'),
+    // dev layout: repo/plugins/zcall-bridge -> repo/app/...
+    path.join(__dirname, '..', '..', 'app', 'native', 'qt-call-and-cap', 'pipebridge.exe'),
+  ];
+  for (const p of candidates) {
+    if (fs.existsSync(p)) return p;
+  }
+  return null;
+}
+
 function validateWine(winePath, prefix) {
-  const pipebridgePath = path.join(__dirname, '..', '..', 'app', 'native', 'qt-call-and-cap', 'pipebridge.exe');
-  if (!fs.existsSync(pipebridgePath)) return false;
+  const pipebridgePath = findPipebridgePath();
+  if (!pipebridgePath) return false;
   try {
     const res = spawnSync(winePath, [pipebridgePath, '--version'], {
       env: Object.assign({}, process.env, { WINEPREFIX: prefix, WINEDEBUG: '-all' }),
