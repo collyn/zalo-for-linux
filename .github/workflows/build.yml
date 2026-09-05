@@ -13,6 +13,11 @@ on:
         required: false
         default: ''
         type: string
+      zalo_win_version:
+        description: 'Zalo Windows Version for the call engine (leave empty for latest)'
+        required: false
+        default: ''
+        type: string
       zadark_version:
         description: 'ZaDark Version/Tag/Commit (leave empty for latest)'
         required: false
@@ -45,6 +50,14 @@ jobs:
         key: ${{ runner.os }}-electron-${{ hashFiles('package-lock.json') }}
         restore-keys: |
           ${{ runner.os }}-electron-
+
+    - name: Cache build downloads (DMG, Windows installer, call engine)
+      uses: actions/cache@v3
+      with:
+        path: temp
+        key: ${{ runner.os }}-zalo-temp-${{ hashFiles('package-lock.json') }}
+        restore-keys: |
+          ${{ runner.os }}-zalo-temp-
           
     - name: Install Node.js dependencies
       run: npm ci --prefer-offline --no-audit
@@ -52,12 +65,13 @@ jobs:
     - name: Install system build dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y liblzma-dev
+        sudo apt-get install -y liblzma-dev p7zip-full gcc-mingw-w64-i686
 
     - name: Setup and Build
       id: build
       env:
         ZALO_VERSION: ${{ github.event.inputs.zalo_version }}
+        ZALO_WIN_VERSION: ${{ github.event.inputs.zalo_win_version }}
         ZADARK_VERSION: ${{ github.event.inputs.zadark_version }}
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         GITHUB_REPOSITORY: ${{ github.repository }}

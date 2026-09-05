@@ -74,8 +74,10 @@ async function main() {
 
   // -------------------------------------------------------------------------
   // 1. plugins/capture from the Windows installer
+  //    NOTE: the Windows version is resolved independently of ZALO_VERSION
+  //    (which refers to the macOS DMG) — the two version families can diverge.
   // -------------------------------------------------------------------------
-  const version = process.env.ZALO_VERSION || await getWindowsVersion();
+  const version = process.env.ZALO_WIN_VERSION || await getWindowsVersion();
   logger.info(`Setting up call-v2 runtime from Zalo Windows v${version}...`);
 
   const exeName = `ZaloSetup-${version}.exe`;
@@ -92,7 +94,8 @@ async function main() {
     fs.copyFileSync(path.join(TEMP_DIR, 'zcall-bridge-extract', 'app-32.7z'), inner7z);
   }
 
-  const captureOut = path.join(TEMP_DIR, 'capture-extract');
+  // version-tagged so CI caching never serves a stale engine for a new version
+  const captureOut = path.join(TEMP_DIR, `capture-extract-${version}`);
   if (!fs.existsSync(path.join(captureOut, 'ZaloCall.exe'))) {
     sevenz(`x -y "${path.basename(inner7z)}" 'Zalo-${version}/plugins/capture/*' -o${captureOut}`);
   }
