@@ -217,11 +217,15 @@ v4l2-ctl --set-fmt-video=width=640,height=480,pixelformat=MJPG
 Trên Wayland, XWayland không nhìn thấy desktop nên ZaloCall (wine) chụp được
 màn hình đen. App có sẵn **bridge riêng**:
 
-1. Cài thành phần (một lần):
+1. Cài thành phần (một lần — nếu thiếu, app tự hiện dialog với đúng lệnh cho
+   distro của bạn khi bấm Share screen):
    ```bash
-   # Fedora:  sudo dnf install xorg-x11-server-Xvfb xdotool python3-dbus
-   # Ubuntu:  sudo apt install xvfb xdotool python3-dbus
-   # Arch:    sudo pacman -S xorg-server-xvfb xdotool python-dbus
+   # Fedora:  sudo dnf install xorg-x11-server-Xvfb xdotool python3-dbus \
+   #            gstreamer1-plugins-base gstreamer1-plugins-bad-free
+   # Ubuntu:  sudo apt install xvfb xdotool python3-dbus \
+   #            gstreamer1.0-plugins-base gstreamer1.0-plugins-bad
+   # Arch:    sudo pacman -S xorg-server-xvfb xdotool python-dbus \
+   #            gst-plugins-base gst-plugins-bad
    ```
    (`streamproxy.so` được build sẵn vào app — không cần cài gì thêm.)
 2. Gọi video **hoàn toàn như bình thường** — giao diện cuộc gọi là cửa sổ

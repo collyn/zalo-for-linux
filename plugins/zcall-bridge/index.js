@@ -1103,11 +1103,16 @@ function startScreenBridge() {
   // Missing system deps fail silently otherwise (gst then reports
   // "Could not open display" and the shim cannot reach :99).
   const missingDeps = [];
-  for (const dep of ['Xvfb', 'python3', 'xdotool']) {
+  for (const dep of ['Xvfb', 'python3', 'xdotool', 'gst-launch-1.0']) {
     try {
       const r = execSync('which ' + dep, { encoding: 'utf8' });
       if (!r.trim()) missingDeps.push(dep);
     } catch (e) { missingDeps.push(dep); }
+  }
+  for (const plugin of ['pipewiresrc', 'ximagesink']) {
+    try {
+      execSync('gst-inspect-1.0 ' + plugin, { stdio: 'ignore' });
+    } catch (e) { missingDeps.push('gst plugin ' + plugin); }
   }
   if (missingDeps.length) {
     if (dialogModule) {
@@ -1115,9 +1120,9 @@ function startScreenBridge() {
         type: 'error', title: 'Zalo — Chia sẻ màn hình',
         message: 'Thiếu thành phần hệ thống: ' + missingDeps.join(', '),
         detail: 'Cài để bật share screen:\n\n' +
-          '  Fedora:  sudo dnf install xorg-x11-server-Xvfb xdotool python3-dbus\n' +
-          '  Ubuntu:  sudo apt install xvfb xdotool python3-dbus\n' +
-          '  Arch:    sudo pacman -S xorg-server-xvfb xdotool python-dbus'
+          '  Fedora:  sudo dnf install xorg-x11-server-Xvfb xdotool python3-dbus gstreamer1-plugins-base gstreamer1-plugins-bad-free\n' +
+          '  Ubuntu:  sudo apt install xvfb xdotool python3-dbus gstreamer1.0-plugins-base gstreamer1.0-plugins-bad\n' +
+          '  Arch:    sudo pacman -S xorg-server-xvfb xdotool python-dbus gst-plugins-base gst-plugins-bad'
       });
     }
     debugLog('screenbridge: missing system deps: ' + missingDeps.join(', '));
