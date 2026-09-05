@@ -440,7 +440,10 @@ function launch({ userDataDir }) {
   const downloadedWine = findDownloadedWine(userDataDir);
   const systemWine = findWine();
   const candidates = [];
-  if (process.env.ZCALL_WINE) candidates.push(process.env.ZCALL_WINE);
+  if (process.env.ZCALL_WINE) {
+    // resolve relative paths — AppImage runs may change the working directory
+    candidates.push(path.resolve(process.env.ZCALL_WINE));
+  }
   if (downloadedWine) candidates.push(downloadedWine);
   if (systemWine && candidates.indexOf(systemWine) === -1) candidates.push(systemWine);
 
