@@ -9,15 +9,20 @@
  * TCP by pipebridge.exe (see app/native/qt-call-and-cap/).
  *
  * This plugin prepares the environment before any call can happen:
- *   1. Locates a wine binary: env ZCALL_WINE -> `wine` in PATH -> Bottles
- *      kron4ek runner -> previously downloaded runtime (userData).
- *   2. If no wine is found on first run, ASKS the user (friendly dialog)
- *      and downloads a portable wine (~100MB) into
- *      <userData>/zcall-wine-runtime/ with a progress window — no root
- *      needed, works on any distro.
+ *   1. Locates a wine binary, best first: env ZCALL_WINE -> user-picked
+ *      custom wine (config) -> downloaded runtime (userData) -> `wine` in
+ *      PATH -> Bottles kron4ek runner. Every candidate is validated by
+ *      actually running a 32-bit exe (pipebridge --version).
+ *   2. If no usable wine exists on first run, ASKS the user (always-on-top
+ *      window with browse/download options) and downloads a portable wine
+ *      (~54MB) into <userData>/zcall-wine-runtime/ with a progress window —
+ *      no root needed, works on any distro.
  *   3. Ensures the wine prefix exists (wineboot), exports
  *      ZCALL_WINE / ZCALL_WINEPREFIX / WINEDEBUG into process.env.
- *   4. On quit, kills the whole wine session of our prefix.
+ *   4. On quit, kills the whole wine session of our prefix; on launch,
+ *      sweeps stale wine processes of unclean previous exits.
+ *   5. Tray menu "Cài đặt gọi điện…" opens a settings window: browse/clear/
+ *      remove wine.
  *
  * Configuration (env vars):
  *   ZCALL_WINE                 wine binary (highest priority)
@@ -35,11 +40,12 @@ const os = require('os');
 const path = require('path');
 const https = require('https');
 
-// Lightest verified build (54MB download / ~565MB extracted; wine 11.x is
-// 96MB / 852MB). 8.6 chosen over 7.22/8.0.1 for a more mature wow64 while
-// keeping the same weight.
+// Recommended build: 11.14 (96MB / ~850MB). Video calls verified working on
+// it; wine 8.6 is lighter (54MB) but its msvcp140/ucrtbase lack
+// _Throw_C_error, which crashes ZaloCall when the video pipeline hits an
+// error (e.g. codec/format negotiation).
 const WINE_DOWNLOAD_URL =
-  'https://github.com/Kron4ek/Wine-Builds/releases/download/8.6/wine-8.6-amd64.tar.xz';
+  'https://github.com/Kron4ek/Wine-Builds/releases/download/11.14/wine-11.14-amd64.tar.xz';
 const RUNTIME_DIRNAME = 'zcall-wine-runtime';
 const CONFIG_FILENAME = 'zcall-config.json';
 
@@ -114,7 +120,9 @@ function findDownloadedWine(userDataDir) {
  */
 function findPipebridgePath() {
   const candidates = [
-    // packaged app: app/ is an extraFile next to the asar
+    // packaged AppImage: app/ sits at the mount root, next to the executable
+    path.join(path.dirname(process.execPath), 'app', 'native', 'qt-call-and-cap', 'pipebridge.exe'),
+    // packaged alternative: extraFiles under resources/
     path.join(process.resourcesPath || '', 'app', 'native', 'qt-call-and-cap', 'pipebridge.exe'),
     // dev layout: repo/plugins/zcall-bridge -> repo/app/...
     path.join(__dirname, '..', '..', 'app', 'native', 'qt-call-and-cap', 'pipebridge.exe'),
@@ -125,22 +133,42 @@ function findPipebridgePath() {
   return null;
 }
 
+// Console output is redirected by Zalo's own logger after bootstrap, so
+// diagnostics go to a file the user can inspect.
+function debugLog(msg) {
+  try {
+    const p = path.join(os.homedir(), '.config', 'ZaloData', 'zcall-debug.log');
+    fs.appendFileSync(p, new Date().toISOString() + ' ' + msg + '\n');
+  } catch (e) { /* ignore */ }
+}
+
 function validateWine(winePath, prefix) {
   const pipebridgePath = findPipebridgePath();
-  if (!pipebridgePath) return false;
+  if (!pipebridgePath) {
+    debugLog('validate: pipebridge.exe not found (resourcesPath=' + (process.resourcesPath || '') + ')');
+    return false;
+  }
+  // Use a dedicated throwaway prefix: validating against the real prefix can
+  // trigger slow version upgrade/downgrade passes (10-30s+) or corrupt state,
+  // and a cold first run needs a generous timeout.
+  const valPrefix = prefix + '-validate';
   try {
     const res = spawnSync(winePath, [pipebridgePath, '--version'], {
-      env: Object.assign({}, process.env, { WINEPREFIX: prefix, WINEDEBUG: '-all' }),
+      env: Object.assign({}, process.env, { WINEPREFIX: valPrefix, WINEDEBUG: '-all' }),
       encoding: 'utf8',
-      timeout: 30000
+      timeout: 120000
     });
     if (res.status === 0 && /pipebridge/.test(res.stdout || '')) return true;
-    console.error('[zcall-bridge] wine validation failed:',
-      'status=' + res.status,
-      'error=' + (res.error ? res.error.message : ''),
-      'stderr=' + String(res.stderr || '').split('\n').slice(0, 3).join(' | '));
+    debugLog('validate FAILED wine=' + winePath + ' pipebridge=' + pipebridgePath +
+      ' prefix=' + valPrefix +
+      ' status=' + res.status +
+      ' spawnError=' + (res.error ? res.error.message : '') +
+      ' stdout=' + String(res.stdout || '').slice(0, 200) +
+      ' stderr=' + String(res.stderr || '').split('\n').slice(0, 4).join(' | '));
+    console.error('[zcall-bridge] wine validation failed:', winePath, '(xem zcall-debug.log)');
     return false;
   } catch (e) {
+    debugLog('validate THREW wine=' + winePath + ' ' + e.message);
     console.error('[zcall-bridge] wine validation threw:', e.message);
     return false;
   }
@@ -152,12 +180,30 @@ function validateWine(winePath, prefix) {
  * legit session exists yet.
  */
 function sweepStaleProcesses(prefix) {
+  // Leftover helper processes from unclean previous exits (kill -9 etc.)
+  killProcessesByPattern('qt-call-and-cap');
+  killProcessesByPattern('PipeZCall');
   try {
     for (const name of ['wineserver', 'winedevice.exe']) {
       let out = '';
       try { out = execSync('pgrep -x ' + name, { encoding: 'utf8' }); } catch (_) { continue; }
       for (const pid of out.trim().split('\n')) {
         if (!pid) continue;
+
+        // winedevice is legit only when its parent is a live wineserver;
+        // orphans get reparented to systemd/init and must be killed.
+        if (name === 'winedevice.exe') {
+          let ppid = '';
+          try {
+            const stat = fs.readFileSync('/proc/' + pid + '/stat', 'utf8');
+            ppid = (stat.split(') ')[1] || '').split(' ')[1] || '';
+          } catch (_) { continue; }
+          if (parentIsWineserver(ppid)) continue; // belongs to a live wineserver
+          process.kill(Number(pid), 'SIGKILL');
+          continue;
+        }
+
+        // wineserver: match by the prefix in its environment
         let env = '';
         try { env = fs.readFileSync('/proc/' + pid + '/environ', 'utf8'); } catch (_) { continue; }
         if (env.includes(prefix)) {
@@ -264,9 +310,12 @@ function showAskWindow(failedWine) {
        không ảnh hưởng hệ thống.</p>
     <div id="url" title="Mở nguồn tải trong trình duyệt">Nguồn tải: ${downloadUrl}</div>
     <label><input type="checkbox" id="never"> Không hỏi lại lần sau nếu không tải</label>
-    <div class="row">
-      <button id="no">Để sau</button>
-      <button id="yes">Tải và bật ngay</button>
+    <div class="row" style="justify-content:space-between">
+      <button id="browse">Chọn file wine có sẵn…</button>
+      <span>
+        <button id="no">Để sau</button>
+        <button id="yes">Tải và bật ngay</button>
+      </span>
     </div>
     <script>
       const {ipcRenderer, shell} = require('electron');
@@ -278,23 +327,47 @@ function showAskWindow(failedWine) {
       }
       document.getElementById('yes').onclick = () => answer(true);
       document.getElementById('no').onclick = () => answer(false);
+      document.getElementById('browse').onclick = () => ipcRenderer.send('zcall-ask-browse');
       document.getElementById('url').onclick = () => shell.openExternal('${downloadUrl}');
     </script>
   </body></html>`;
   win.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html));
 
   return new Promise((resolve) => {
-    const onResult = (_e, result) => {
+    let resolved = false;
+    const finish = (result) => {
+      if (resolved) return;
+      resolved = true;
       ipcMain.removeListener('zcall-ask-result', onResult);
-      try { win.close(); } catch (e) { /* already closed */ }
+      ipcMain.removeListener('zcall-ask-browse', onBrowse);
       resolve(result || { download: false, neverAgain: false });
+      // destroy AFTER resolve: destroy() emits 'closed' synchronously,
+      // which would otherwise let the fallback resolve a wrong value first
+      try { win.destroy(); } catch (e) { /* already closed */ }
+    };
+    const onResult = (_e, result) => finish(result);
+    const onBrowse = async () => {
+      const picked = await dialogModule.showOpenDialog(win, {
+        title: 'Chọn file wine',
+        properties: ['openFile']
+      });
+      const chosen = picked.filePaths && picked.filePaths[0];
+      if (!chosen) return;
+      if (validateWine(chosen, process.env.ZCALL_WINEPREFIX || path.join(os.homedir(), '.config', 'ZaloData', 'zcall-wine'))) {
+        finish({ download: false, neverAgain: false, pickedWine: chosen });
+      } else {
+        dialogModule.showMessageBox(win, {
+          type: 'error',
+          title: 'Zalo — Tính năng gọi điện',
+          message: 'Wine này không dùng được',
+          detail: 'File đã chọn không chạy được ứng dụng 32-bit hoặc không phải wine hợp lệ:\n' + chosen
+        });
+      }
     };
     ipcMain.on('zcall-ask-result', onResult);
+    ipcMain.on('zcall-ask-browse', onBrowse);
     // fallback: user closed the window somehow
-    win.on('closed', () => {
-      ipcMain.removeListener('zcall-ask-result', onResult);
-      resolve({ download: false, neverAgain: false });
-    });
+    win.on('closed', () => finish({ download: false, neverAgain: false }));
   });
 }
 
@@ -339,7 +412,7 @@ function showProgressWindow() {
       try { win.webContents.send('progress', pct, text); } catch (e) { /* window closed */ }
     },
     close() {
-      try { win.close(); } catch (e) { /* already closed */ }
+      try { win.destroy(); } catch (e) { /* already closed */ }
     }
   };
 }
@@ -358,6 +431,16 @@ async function promptAndInstall(userDataDir, failedWine) {
   }
 
   if (!result.download) {
+    // User picked an existing wine file: save it and use it.
+    if (result.pickedWine) {
+      const prefix = process.env.ZCALL_WINEPREFIX || path.join(userDataDir, 'zcall-wine');
+      writeConfig(userDataDir, { wineSetup: 'ready', winePath: result.pickedWine });
+      process.env.ZCALL_WINE = result.pickedWine;
+      process.env.ZCALL_WINEPREFIX = prefix;
+      if (!process.env.WINEDEBUG) process.env.WINEDEBUG = '-all';
+      console.log('[zcall-bridge] custom wine selected:', result.pickedWine);
+      return result.pickedWine;
+    }
     // "Để sau": ask again on next launch; ticked "không hỏi lại" -> never.
     writeConfig(userDataDir, { wineSetup: result.neverAgain ? 'declined-permanent' : 'declined' });
     return null;
@@ -365,6 +448,7 @@ async function promptAndInstall(userDataDir, failedWine) {
 
   const progress = showProgressWindow();
   try {
+    debugLog('install: starting download of portable wine');
     let lastUpdate = 0;
     const wine = await installDownloadedWine(userDataDir, (got, total) => {
       const now = Date.now();
@@ -373,6 +457,7 @@ async function promptAndInstall(userDataDir, failedWine) {
       const pct = Math.round((got / total) * 100);
       progress.set(pct, `Đang tải… ${Math.round(got / 1024 / 1024)}MB / ${Math.round(total / 1024 / 1024)}MB (${pct}%)`);
     });
+    debugLog('install: downloaded, extracting...');
     progress.set(100, 'Đang giải nén và chuẩn bị…');
 
     // First prefix init (~10-30s, done once)
@@ -395,6 +480,7 @@ async function promptAndInstall(userDataDir, failedWine) {
     }
 
     progress.close();
+    debugLog('install: SUCCESS wine=' + wine + ' prefix=' + prefix);
 
     process.env.ZCALL_WINE = wine;
     process.env.ZCALL_WINEPREFIX = prefix;
@@ -409,6 +495,7 @@ async function promptAndInstall(userDataDir, failedWine) {
     }
     return wine;
   } catch (e) {
+    debugLog('install FAILED: ' + String((e && e.message) || e) + '\n' + String((e && e.stack) || '').split('\n').slice(0, 3).join('\n'));
     progress.close();
     const parent = BrowserWindowModule.getFocusedWindow() || BrowserWindowModule.getAllWindows()[0];
     if (dialogModule) {
@@ -435,14 +522,19 @@ function launch({ userDataDir }) {
   // Clean stale wine processes from unclean previous exits
   sweepStaleProcesses(prefix);
 
-  // Candidate wines, best first: explicit env -> our portable runtime
-  // (version we control and test) -> system wine -> Bottles runners.
+  // Candidate wines, best first: explicit env -> user-picked custom wine ->
+  // our portable runtime (version we control and test) -> system wine ->
+  // Bottles runners.
   const downloadedWine = findDownloadedWine(userDataDir);
   const systemWine = findWine();
   const candidates = [];
   if (process.env.ZCALL_WINE) {
     // resolve relative paths — AppImage runs may change the working directory
     candidates.push(path.resolve(process.env.ZCALL_WINE));
+  }
+  const cfgSaved = readConfig(userDataDir);
+  if (cfgSaved.winePath && fs.existsSync(cfgSaved.winePath) && candidates.indexOf(cfgSaved.winePath) === -1) {
+    candidates.push(cfgSaved.winePath);
   }
   if (downloadedWine) candidates.push(downloadedWine);
   if (systemWine && candidates.indexOf(systemWine) === -1) candidates.push(systemWine);
@@ -479,7 +571,7 @@ function launch({ userDataDir }) {
     // Downloaded runtime exists but cannot run (machine lacks 32-bit
     // libraries): re-downloading would loop forever — guide the user
     // instead, once, without nagging every launch.
-    if (failedWine === downloadedWine) {
+    if (downloadedWine && failedWine === downloadedWine) {
       console.error('[zcall-bridge] downloaded wine broken (missing 32-bit libs?)');
       if (cfg.wineSetup !== 'broken' && process.env.ZCALL_AUTO_SETUP !== '1') {
         writeConfig(userDataDir, { wineSetup: 'broken' });
@@ -526,19 +618,19 @@ function getI386InstallHint() {
   if (idLike.includes('fedora') || idLike.includes('rhel') || idLike.includes('centos')) {
     return {
       title: 'Cài thư viện 32-bit (Fedora/RHEL):',
-      command: 'sudo dnf install -y glibc.i686 libX11.i686 libXext.i686 freetype.i686 mesa-libGL.i686 pulseaudio-libs.i686 zlib-ng-compat.i686 gstreamer1.i686 gstreamer1-plugins-base.i686 gstreamer1-plugins-good.i686 gstreamer1-plugins-bad-free.i686\n\n(GStreamer 32-bit cần cho video call; gstreamer1-plugin-libav cần RPM Fusion)\n\nHoặc cài wine hệ thống (tự kéo đủ thư viện):\nsudo dnf install wine'
+      command: 'sudo dnf install -y glibc.i686 libX11.i686 libXext.i686 freetype.i686 mesa-libGL.i686 pulseaudio-libs.i686 alsa-lib.i686 libv4l.i686 zlib-ng-compat.i686 gstreamer1.i686 gstreamer1-plugins-base.i686 gstreamer1-plugins-good.i686 gstreamer1-plugins-bad-free.i686\n\n(GStreamer 32-bit cần cho video call; gstreamer1-plugin-libav cần RPM Fusion)\n\nHoặc cài wine hệ thống (tự kéo đủ thư viện):\nsudo dnf install wine'
     };
   }
   if (idLike.includes('arch')) {
     return {
       title: 'Cài thư viện 32-bit (Arch):',
-      command: 'sudo pacman -S --needed lib32-glibc lib32-libx11 lib32-libxext lib32-freetype2 lib32-mesa lib32-libpulse lib32-zlib lib32-gstreamer lib32-gst-plugins-base lib32-gst-plugins-good lib32-gst-libav\n\n(GStreamer 32-bit cần cho video call)\n\nHoặc cài wine hệ thống:\nsudo pacman -S wine'
+      command: 'sudo pacman -S --needed lib32-glibc lib32-libx11 lib32-libxext lib32-freetype2 lib32-mesa lib32-libpulse lib32-alsa-lib lib32-libv4l lib32-zlib lib32-gstreamer lib32-gst-plugins-base lib32-gst-plugins-good lib32-gst-libav\n\n(GStreamer 32-bit cần cho video call)\n\nHoặc cài wine hệ thống:\nsudo pacman -S wine'
     };
   }
   // default: Debian/Ubuntu family
   return {
     title: 'Cài thư viện 32-bit (Ubuntu/Debian):',
-    command: 'sudo dpkg --add-architecture i386 && sudo apt update\nsudo apt install -y libc6:i386 libx11-6:i386 libfreetype6:i386 libgl1:i386 libpulse0:i386 zlib1g:i386 libgstreamer1.0-0:i386 libgstreamer-plugins-base1.0-0:i386 gstreamer1.0-plugins-good:i386 gstreamer1.0-libav:i386\n\n(GStreamer 32-bit cần cho video call)\n\nHoặc cài wine hệ thống (tự kéo đủ thư viện):\nsudo apt install wine'
+    command: 'sudo dpkg --add-architecture i386 && sudo apt update\nsudo apt install -y libc6:i386 libx11-6:i386 libfreetype6:i386 libgl1:i386 libpulse0:i386 libasound2:i386 libv4l-0:i386 zlib1g:i386 libgstreamer1.0-0:i386 libgstreamer-plugins-base1.0-0:i386 gstreamer1.0-plugins-good:i386 gstreamer1.0-libav:i386\n\n(GStreamer 32-bit cần cho video call)\n\nHoặc cài wine hệ thống (tự kéo đủ thư viện):\nsudo apt install wine'
   };
 }
 
@@ -560,69 +652,291 @@ function showBrokenWineDialog(winePath) {
 
 function openSetupDialog({ userDataDir }) {
   getElectronModules();
+  if (!BrowserWindowModule) return;
+  const { ipcMain } = require('electron');
   const prefix = process.env.ZCALL_WINEPREFIX || path.join(userDataDir, 'zcall-wine');
-  const downloadedWine = findDownloadedWine(userDataDir);
-  const wine = process.env.ZCALL_WINE || findWine() || downloadedWine;
 
-  // Downloaded runtime broken? Guide instead of re-downloading forever.
-  if (wine === downloadedWine && !validateWine(wine, prefix)) {
-    showBrokenWineDialog(downloadedWine);
-    return;
-  }
-
-  if (wine) {
-    if (dialogModule) {
-      dialogModule.showMessageBox({
-        type: 'info',
-        title: 'Zalo — Tính năng gọi điện',
-        message: 'Tính năng gọi điện đang hoạt động',
-        detail: 'Wine đang dùng: ' + wine
+  const win = new BrowserWindowModule({
+    width: 600,
+    height: 460,
+    frame: false,
+    resizable: false,
+    center: true,
+    alwaysOnTop: true,
+    webPreferences: { contextIsolation: false, nodeIntegration: true }
+  });
+  const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
+    body{font-family:sans-serif;background:#1f1f1f;color:#eee;margin:0;padding:20px 24px;-webkit-app-region:drag}
+    h3{margin:0 0 10px;font-size:16px}
+    #status{font-size:13px;color:#ccc;background:#2a2a2a;border-radius:6px;padding:10px 12px;margin-bottom:14px;line-height:1.5;word-break:break-all}
+    button{display:block;width:100%;font-size:13px;padding:10px;margin-bottom:10px;border-radius:6px;border:none;cursor:pointer;background:#3a3a3a;color:#eee;-webkit-app-region:no-drag}
+    button:hover{background:#4a4a4a}
+    .pathrow{display:flex;gap:8px;margin-bottom:10px;-webkit-app-region:no-drag}
+    .pathrow input{flex:1;font-size:13px;padding:9px 10px;border-radius:6px;border:1px solid #4a4a4a;background:#2a2a2a;color:#eee}
+    .pathrow button{width:auto;margin:0;white-space:nowrap}
+    #close{background:#2a2a2a}
+  </style></head><body>
+    <h3>Zalo — Cài đặt gọi điện</h3>
+    <div id="status">Đang kiểm tra…</div>
+    <div class="pathrow">
+      <input id="pathInput" placeholder="Nhập đường dẫn wine, ví dụ /usr/bin/wine">
+      <button id="setpath">Dùng đường dẫn này</button>
+    </div>
+    <button id="browse">Chọn file wine khác…</button>
+    <button id="download">Tải wine về (~54MB)</button>
+    <button id="clear">Bỏ lựa chọn wine đã lưu</button>
+    <button id="remove">Xóa wine đã tải về khỏi máy</button>
+    <button id="close">Đóng</button>
+    <script>
+      const {ipcRenderer} = require('electron');
+      // pass the command as the IPC argument so the main handler can match it
+      const send = (cmd, arg) => ipcRenderer.send(cmd, arg || cmd);
+      const closeWin = () => { send('zcall-cfg-close'); setTimeout(() => window.close(), 80); };
+      document.getElementById('browse').onclick = () => send('zcall-cfg-browse');
+      document.getElementById('download').onclick = () => send('zcall-cfg-download');
+      document.getElementById('clear').onclick = () => send('zcall-cfg-clear');
+      document.getElementById('remove').onclick = () => send('zcall-cfg-remove');
+      document.getElementById('setpath').onclick = () => send('zcall-cfg-setpath', document.getElementById('pathInput').value.trim());
+      document.getElementById('close').onclick = closeWin;
+      document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeWin(); });
+      ipcRenderer.on('zcall-cfg-status', (e, text) => {
+        document.getElementById('status').textContent = text;
       });
+    </script>
+  </body></html>`;
+  win.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html));
+
+  const currentWine = () => process.env.ZCALL_WINE || findWine() || findDownloadedWine(userDataDir);
+  const pushStatus = () => {
+    const w = currentWine();
+    const cfg = readConfig(userDataDir);
+    let text = w
+      ? 'Wine đang dùng: ' + w + (cfg.winePath ? '\n(Lựa chọn đã lưu: ' + cfg.winePath + ')' : '')
+      : 'Chưa có wine — tính năng gọi chưa hoạt động.';
+    try { win.webContents.send('zcall-cfg-status', text); } catch (e) { /* closed */ }
+  };
+  pushStatus();
+
+  const onIpc = (_e, cmd, arg) => {
+    if (cmd === 'zcall-cfg-close') { try { win.destroy(); } catch (e) {} return; }
+    if (cmd === 'zcall-cfg-browse') {
+      dialogModule.showOpenDialog(win, { title: 'Chọn file wine', properties: ['openFile'] }).then((picked) => {
+        const chosen = picked.filePaths && picked.filePaths[0];
+        if (!chosen) return;
+        if (validateWine(chosen, prefix)) {
+          writeConfig(userDataDir, { wineSetup: 'ready', winePath: chosen });
+          process.env.ZCALL_WINE = chosen;
+          process.env.ZCALL_WINEPREFIX = prefix;
+          pushStatus();
+          new NotificationModule({ title: 'Zalo', body: 'Đã chọn wine: ' + chosen }).show();
+        } else {
+          dialogModule.showMessageBox(win, {
+            type: 'error', title: 'Zalo — Tính năng gọi điện',
+            message: 'Wine này không dùng được',
+            detail: 'File đã chọn không chạy được ứng dụng 32-bit:\n' + chosen
+          });
+        }
+      });
+      return;
     }
-    return;
-  }
-  promptAndInstall(userDataDir);
+    if (cmd === 'zcall-cfg-setpath') {
+      const typed = String(arg || '').trim();
+      if (!typed) {
+        dialogModule.showMessageBox(win, {
+          type: 'info', title: 'Zalo — Tính năng gọi điện',
+          message: 'Chưa nhập đường dẫn',
+          detail: 'Hãy nhập đường dẫn đầy đủ tới file wine, ví dụ /usr/bin/wine'
+        });
+        return;
+      }
+      if (!fs.existsSync(typed)) {
+        dialogModule.showMessageBox(win, {
+          type: 'error', title: 'Zalo — Tính năng gọi điện',
+          message: 'Không tìm thấy file',
+          detail: 'Đường dẫn không tồn tại:\n' + typed
+        });
+        return;
+      }
+      if (!validateWine(typed, prefix)) {
+        dialogModule.showMessageBox(win, {
+          type: 'error', title: 'Zalo — Tính năng gọi điện',
+          message: 'Wine này không dùng được',
+          detail: 'File không chạy được ứng dụng 32-bit hoặc không phải wine hợp lệ:\n' + typed
+        });
+        return;
+      }
+      writeConfig(userDataDir, { wineSetup: 'ready', winePath: typed });
+      process.env.ZCALL_WINE = typed;
+      process.env.ZCALL_WINEPREFIX = prefix;
+      pushStatus();
+      dialogModule.showMessageBox(win, {
+        type: 'info', title: 'Zalo — Tính năng gọi điện',
+        message: 'Đã lưu đường dẫn wine',
+        detail: typed + '\n\nLần mở app sau sẽ dùng wine này (có thể bỏ bằng nút "Bỏ lựa chọn wine đã lưu").'
+      });
+      return;
+    }
+    if (cmd === 'zcall-cfg-download') {
+      win.destroy();
+      promptAndInstall(userDataDir);
+      return;
+    }
+    if (cmd === 'zcall-cfg-clear') {
+      const cfg = readConfig(userDataDir);
+      if (cfg.winePath) {
+        delete cfg.winePath;
+        writeConfig(userDataDir, cfg);
+        pushStatus();
+        dialogModule.showMessageBox(win, {
+          type: 'info', title: 'Zalo — Tính năng gọi điện',
+          message: 'Đã bỏ lựa chọn wine đã lưu',
+          detail: 'Lần mở app sau sẽ tự dò wine lại (wine tải về → wine hệ thống).\nWine đang dùng phiên này: ' + (process.env.ZCALL_WINE || '(không có)')
+        });
+      } else {
+        dialogModule.showMessageBox(win, {
+          type: 'info', title: 'Zalo — Tính năng gọi điện',
+          message: 'Không có lựa chọn wine nào đang lưu',
+          detail: 'App đang dùng wine theo chế độ tự dò. Không có gì để bỏ.'
+        });
+      }
+      return;
+    }
+    if (cmd === 'zcall-cfg-remove') {
+      const runtime = path.join(userDataDir, RUNTIME_DIRNAME);
+      if (!fs.existsSync(runtime)) {
+        dialogModule.showMessageBox(win, {
+          type: 'info', title: 'Zalo — Tính năng gọi điện',
+          message: 'Không có wine đã tải về',
+          detail: 'Chưa có thư mục wine tải về trên máy này.'
+        });
+        return;
+      }
+      dialogModule.showMessageBox(win, {
+        type: 'warning', buttons: ['Xóa', 'Hủy'], defaultId: 1, cancelId: 1,
+        title: 'Zalo — Tính năng gọi điện',
+        message: 'Xóa wine đã tải về?',
+        detail: 'Sẽ xóa thư mục ' + runtime + '\nBạn có thể tải lại bất cứ lúc nào.'
+      }).then(({ response }) => {
+        if (response === 0) {
+          try { fs.rmSync(runtime, { recursive: true, force: true }); } catch (e) {}
+          const cfg = readConfig(userDataDir);
+          delete cfg.winePath;
+          writeConfig(userDataDir, cfg);
+          pushStatus();
+          dialogModule.showMessageBox(win, {
+            type: 'info', title: 'Zalo — Tính năng gọi điện',
+            message: 'Đã xóa wine đã tải về',
+            detail: 'Thư mục đã bị xóa. Lần mở app sau sẽ hỏi lại hoặc tự dò wine hệ thống.'
+          });
+        }
+      });
+      return;
+    }
+  };
+  const CFG_CHANNELS = ['zcall-cfg-browse', 'zcall-cfg-download', 'zcall-cfg-clear',
+                        'zcall-cfg-remove', 'zcall-cfg-close', 'zcall-cfg-setpath'];
+  for (const c of CFG_CHANNELS) ipcMain.on(c, onIpc);
+  win.on('closed', () => {
+    for (const c of CFG_CHANNELS) {
+      ipcMain.removeListener(c, onIpc);
+    }
+  });
 }
 
-function shutdown() {
-  // Kill the whole wine session for our prefix: ZaloCall.exe dies with the
-  // app (the call-v2 module kills it), but pipebridge.exe is spawned
-  // fire-and-forget and would keep wineserver alive forever. wineserver -k
-  // terminates wineserver and every wine client in this prefix.
-  const wine = process.env.ZCALL_WINE;
-  const prefix = process.env.ZCALL_WINEPREFIX;
-  if (!wine || !prefix) return;
-
-  const wineserverPath = path.join(path.dirname(wine), 'wineserver');
-  if (!fs.existsSync(wineserverPath)) return;
-
+function killProcessesByPattern(pattern) {
   try {
-    spawnSync(wineserverPath, ['-k'], {
-      env: Object.assign({}, process.env, { WINEPREFIX: prefix, WINEDEBUG: '-all' }),
-      stdio: 'ignore',
-      timeout: 10000
-    });
+    const out = execSync('pgrep -f ' + pattern, { encoding: 'utf8' });
+    for (const pid of out.trim().split('\n')) {
+      if (!pid || Number(pid) === process.pid) continue;
+      try { process.kill(Number(pid), 'SIGKILL'); } catch (_) { /* gone */ }
+    }
+  } catch (_) { /* no matches */ }
+}
+
+
+function parentIsWineserver(ppid) {
+  try {
+    return fs.readFileSync('/proc/' + ppid + '/comm', 'utf8').trim() === 'wineserver';
   } catch (e) {
-    console.error('[zcall-bridge] wineserver -k failed:', e.message);
+    return false;
+  }
+}
+
+function killWineSession(prefix) {
+  // 1. Kill the wine loader + helper processes spawned by the app. Their
+  //    cmdlines contain the engine path (dev: .../app/native/qt-call-and-cap,
+  //    packaged: /tmp/.mount_zalo*/app/native/qt-call-and-cap). pipebridge
+  //    sleeps forever and never exits on its own.
+  killProcessesByPattern('qt-call-and-cap');
+  killProcessesByPattern('PipeZCall');
+
+  // 2. Kill the wineserver serving our prefix.
+  const wine = process.env.ZCALL_WINE;
+  if (wine) {
+    const wineserverPath = path.join(path.dirname(wine), 'wineserver');
+    if (fs.existsSync(wineserverPath)) {
+      try {
+        spawnSync(wineserverPath, ['-k'], {
+          env: Object.assign({}, process.env, { WINEPREFIX: prefix, WINEDEBUG: '-all' }),
+          stdio: 'ignore',
+          timeout: 10000
+        });
+      } catch (e) {
+        console.error('[zcall-bridge] wineserver -k failed:', e.message);
+      }
+    }
   }
 
-  // Hard-kill any lingering wine processes that still serve OUR prefix (the
-  // -k above normally suffices, but during quit races a fresh server can
-  // appear or winedevice can outlive its killed server).
+  // 3. Hard-kill lingering wineserver/winedevice of our prefix.
   try {
     for (const name of ['wineserver', 'winedevice.exe']) {
       let out = '';
       try { out = execSync('pgrep -x ' + name, { encoding: 'utf8' }); } catch (_) { continue; }
       for (const pid of out.trim().split('\n')) {
         if (!pid) continue;
-        let env = '';
-        try { env = fs.readFileSync('/proc/' + pid + '/environ', 'utf8'); } catch (_) { continue; }
-        if (env.includes(prefix)) {
-          process.kill(Number(pid), 'SIGKILL');
+        if (name === 'winedevice.exe') {
+          // winedevice is legit only when its parent is a live wineserver;
+          // orphans get reparented to systemd/init and must be killed.
+          let ppid = '';
+          try {
+            const stat = fs.readFileSync('/proc/' + pid + '/stat', 'utf8');
+            ppid = (stat.split(') ')[1] || '').split(' ')[1] || '';
+          } catch (_) { continue; }
+          if (parentIsWineserver(ppid)) continue;
+        } else {
+          let env = '';
+          try { env = fs.readFileSync('/proc/' + pid + '/environ', 'utf8'); } catch (_) { continue; }
+          if (!env.includes(prefix)) continue;
         }
+        try { process.kill(Number(pid), 'SIGKILL'); } catch (_) { /* gone */ }
       }
     }
   } catch (_) { /* nothing left */ }
+
+  // 4. Second pass: the wineserver death is async — winedevice processes
+  //    whose parent just died are still orphan checkable after a short wait.
+  try { execSync('sleep 2'); } catch (_) { /* ignore */ }
+  try {
+    let out = '';
+    try { out = execSync('pgrep -x winedevice.exe', { encoding: 'utf8' }); } catch (_) { return; }
+    for (const pid of out.trim().split('\n')) {
+      if (!pid) continue;
+      let ppid = '';
+      try {
+        const stat = fs.readFileSync('/proc/' + pid + '/stat', 'utf8');
+        ppid = (stat.split(') ')[1] || '').split(' ')[1] || '';
+      } catch (_) { continue; }
+      if (!parentIsWineserver(ppid)) {
+        try { process.kill(Number(pid), 'SIGKILL'); } catch (_) { /* gone */ }
+      }
+    }
+  } catch (_) { /* nothing left */ }
+}
+
+function shutdown() {
+  const prefix = process.env.ZCALL_WINEPREFIX;
+  if (!prefix) return;
+  killWineSession(prefix);
 }
 
 module.exports = {

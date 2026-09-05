@@ -91,6 +91,13 @@ const REPLACEMENTS = [
     from: 'let S,D,O,N,A,C=null,I=null,L=!1,P=[],M=!1,k=!0,x=[],F=!1,U=!1',
     to: 'let S,D,O,N,A,C=null,I=null,L=!1,P=[],M=!1,k=!0,x=[],F=!1,U=!1,TK=null',
   },
+  // 9. Reset the "native started" flag when the helper spawn FAILS (e.g.
+  //    wine missing). Without this, a failed first spawn leaves L=true
+  //    forever and later call attempts never re-spawn until app restart.
+  {
+    from: 'A.on("error",(e=>{d.zsymb(22,"4OM2ud",["client error","6Br8Rv"],e)}))',
+    to: 'A.on("error",(e=>{L=!1,d.zsymb(22,"4OM2ud",["client error","6Br8Rv"],e)}))',
+  },
   {
     from: 'i(process.env.ZCALL_WINE||"wine",[o.join(__dirname,"..","native","qt-call-and-cap","pipebridge.exe"),"29631","29632"]),A=i(process.env.ZCALL_WINE||"wine"',
     to: 'TK="zcall-"+Math.random().toString(36).slice(2)+Date.now().toString(36),i(process.env.ZCALL_WINE||"wine",[o.join(__dirname,"..","native","qt-call-and-cap","pipebridge.exe"),"29631","29632",TK]),A=i(process.env.ZCALL_WINE||"wine"',

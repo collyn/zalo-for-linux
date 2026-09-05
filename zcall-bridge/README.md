@@ -107,7 +107,7 @@ gọi** — và hộp thoại hỏi tải wine ở trên sẽ xuất hiện.
 | `ZCALL_WINEPREFIX` | Prefix wine dành riêng cho app | `<userData>/zcall-wine` |
 | `ZCALL_DISABLE` | Set bất kỳ giá trị nào để tắt hẳn tính năng gọi | — |
 | `ZCALL_AUTO_SETUP` | `'1'` = tải wine tự động, không hỏi (dùng khi triển khai hàng loạt/script) | — |
-| `ZCALL_WINE_DOWNLOAD_URL` | Ghi đè URL tải wine portable | URL kron4ek 11.14 trên GitHub |
+| `ZCALL_WINE_DOWNLOAD_URL` | Ghi đè URL tải wine portable | URL kron4ek 8.6 trên GitHub |
 
 > ⚠️ Wine cần hỗ trợ chạy app 32-bit (ZaloCall.exe là PE32). Bản wine tải
 > tự động (kron4ek classic) dùng loader 32-bit nên **máy cần thư viện 32-bit**.
@@ -116,18 +116,18 @@ gọi** — và hộp thoại hỏi tải wine ở trên sẽ xuất hiện.
 > **Ubuntu/Debian:**
 > ```bash
 > sudo dpkg --add-architecture i386 && sudo apt update
-> sudo apt install -y libc6:i386 libx11-6:i386 libfreetype6:i386 libgl1:i386 libpulse0:i386 zlib1g:i386
+> sudo apt install -y libc6:i386 libx11-6:i386 libfreetype6:i386 libgl1:i386 libpulse0:i386 libasound2:i386 libv4l-0:i386 zlib1g:i386 libgstreamer1.0-0:i386 libgstreamer-plugins-base1.0-0:i386 gstreamer1.0-plugins-good:i386 gstreamer1.0-libav:i386
 > ```
 > **Fedora/RHEL:**
 > ```bash
-> sudo dnf install -y glibc.i686 libX11.i686 libXext.i686 freetype.i686 mesa-libGL.i686 pulseaudio-libs.i686 zlib-ng-compat.i686 gstreamer1.i686 gstreamer1-plugins-base.i686 gstreamer1-plugins-good.i686 gstreamer1-plugins-bad-free.i686
+> sudo dnf install -y glibc.i686 libX11.i686 libXext.i686 freetype.i686 mesa-libGL.i686 pulseaudio-libs.i686 alsa-lib.i686 libv4l.i686 zlib-ng-compat.i686 gstreamer1.i686 gstreamer1-plugins-base.i686 gstreamer1-plugins-good.i686 gstreamer1-plugins-bad-free.i686
 > ```
 > (GStreamer 32-bit cần cho video call — nếu thiếu, video call crash trong winegstreamer.
 > `gstreamer1-plugin-libav.i686` để decode H.264 cần RPM Fusion:
 > `sudo dnf install https://download1.rpmfusion.org/free/fedora/rpmfusion-free-release-$(rpm -E %fedora).noarch.rpm` rồi `sudo dnf install gstreamer1-plugin-libav.i686`)
 > **Arch:**
 > ```bash
-> sudo pacman -S --needed lib32-glibc lib32-libx11 lib32-libxext lib32-freetype2 lib32-mesa lib32-libpulse lib32-zlib
+> sudo pacman -S --needed lib32-glibc lib32-libx11 lib32-libxext lib32-freetype2 lib32-mesa lib32-libpulse lib32-alsa-lib lib32-libv4l lib32-zlib lib32-gstreamer lib32-gst-plugins-base lib32-gst-plugins-good lib32-gst-libav
 > ```
 > (hoặc cài wine hệ thống — `apt install wine` / `dnf install wine` /
 > `pacman -S wine` — tự kéo đủ thư viện).
@@ -196,8 +196,16 @@ rm -rf /tmp/test-prefix
 
 - ✅ ZaloCall.exe chạy dưới Wine (wow64), kết nối đủ 2 kênh. Các bản đã test
   thật qua replay (init → makeCall → incall → success → sendSignal):
-  **11.14** (96MB/852MB), **8.6** (54MB/565MB — dùng làm mặc định tải tự
-  động), **8.0.1** (53MB/564MB), **7.22** (53MB/563MB)
+  **11.14** (96MB/852MB — bản khuyên dùng, video call đã xác minh thật),
+  **8.6** (54MB/565MB — nhẹ hơn nhưng video call crash `msvcp140._Throw_C_error`
+  thiếu hàm CRT khi gặp lỗi decode), **8.0.1**, **7.22**
+- ✅ **Video call hoạt động** trên Fedora (wine 11.14 + GStreamer 32-bit +
+  libv4l) — camera đôi khi cần ép format: `v4l2-ctl --set-fmt-video=width=640,height=480,pixelformat=MJPG`
+- ⚠️ **Share screen không hoạt động trên Wayland** — wine chỉ capture qua
+  X11/XWayland, và XWayland không nhìn thấy desktop Wayland. Cần đăng nhập
+  phiên X11 (GNOME on Xorg / Plasma X11) để dùng tính năng này. Đây là giới
+  hạn chung của phần mềm Windows qua Wine trên Wayland, không có cách xử lý
+  từ phía app.
 - ✅ `native-ready` → `init` → `makeCall` → `callState: incall`, `show success`,
   `sendSignal 401` — engine thực hiện cuộc gọi thật (voice + video signaling)
 - ✅ **Người dùng xác nhận cuộc gọi thoại hoạt động** trong app
