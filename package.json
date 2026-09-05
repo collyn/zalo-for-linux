@@ -59,6 +59,10 @@
           "!node_modules",
           "!package-lock.json"
         ]
+      },
+      {
+        "from": "zcall-bridge",
+        "to": "zcall-bridge"
       }
     ],
     "asarUnpack": [

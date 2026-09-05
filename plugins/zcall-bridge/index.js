@@ -114,6 +114,19 @@ function findDownloadedWine(userDataDir) {
 }
 
 /**
+ * Wine bundled inside the "Full" AppImage variant (app/native/wine-runtime).
+ * In the packaged app, app/ sits at the AppImage mount root next to the
+ * executable; in dev mode it is the repo's app/ directory.
+ */
+function findBundledWine() {
+  const candidates = [
+    path.join(path.dirname(process.execPath), 'app', 'native', 'wine-runtime', 'bin', 'wine'),
+    path.join(__dirname, '..', '..', 'app', 'native', 'wine-runtime', 'bin', 'wine')
+  ];
+  return candidates.find((p) => fs.existsSync(p)) || null;
+}
+
+/**
  * Verify that this wine can actually run 32-bit executables (ZaloCall is a
  * PE32 binary). Runs pipebridge.exe --version (a 32-bit exe) with a timeout.
  * Returns true only when it prints the expected output.
@@ -131,6 +144,23 @@ function findPipebridgePath() {
     if (fs.existsSync(p)) return p;
   }
   return null;
+}
+
+/**
+ * Real filesystem path into the zcall-bridge directory. These files are
+ * spawned or LD_PRELOADed, so they must live OUTSIDE the asar archive: the
+ * package config ships zcall-bridge/ next to app/ at the AppImage mount
+ * root. Returns the packaged path when present, else the dev layout.
+ */
+function zcallBridgePath(...parts) {
+  const candidates = [
+    path.join(path.dirname(process.execPath), 'zcall-bridge', ...parts),
+    path.join(__dirname, '..', '..', 'zcall-bridge', ...parts)
+  ];
+  for (const p of candidates) {
+    if (fs.existsSync(p)) return p;
+  }
+  return candidates[1];
 }
 
 // Console output is redirected by Zalo's own logger after bootstrap, so
@@ -536,7 +566,11 @@ function launch({ userDataDir }) {
   if (cfgSaved.winePath && fs.existsSync(cfgSaved.winePath) && candidates.indexOf(cfgSaved.winePath) === -1) {
     candidates.push(cfgSaved.winePath);
   }
-  if (downloadedWine) candidates.push(downloadedWine);
+  // Bundled runtime first among the auto-discovered ones: it is paired with
+  // the exact app release (Full variant) and needs no download.
+  const bundledWine = findBundledWine();
+  if (bundledWine) candidates.push(bundledWine);
+  if (downloadedWine && candidates.indexOf(downloadedWine) === -1) candidates.push(downloadedWine);
   if (systemWine && candidates.indexOf(systemWine) === -1) candidates.push(systemWine);
 
   let wine = null;
@@ -604,7 +638,7 @@ function launch({ userDataDir }) {
   // the real display) and it signals a share request via a file, which the
   // watcher below turns into an automatic bridge start — no tray click
   // needed when the user hits "Share screen".
-  const proxySo = path.join(__dirname, '..', '..', 'zcall-bridge', 'streamproxy.so');
+  const proxySo = zcallBridgePath('streamproxy.so');
   if (fs.existsSync(proxySo)) {
     process.env.ZCALL_PROXY_SO = proxySo;
     process.env.ZCALL_PROXY_LOG = path.join(os.homedir(), '.config', 'ZaloData', 'zcall-proxy.log');
@@ -1023,7 +1057,7 @@ function startScreenBridge() {
     return true;
   }
 
-  const pyPath = path.join(__dirname, '..', '..', 'zcall-bridge', 'screenbridge.py');
+  const pyPath = zcallBridgePath('screenbridge.py');
   if (!fs.existsSync(pyPath)) {
     if (dialogModule) {
       dialogModule.showMessageBox({
@@ -1039,7 +1073,7 @@ function startScreenBridge() {
   // reads from the real display root to the bridge display, so the call UI
   // stays 100% native while "share screen" captures the bridged stream.
   // It is compiled by scripts/setup-zcall-bridge.js.
-  const proxySoPath = path.join(__dirname, '..', '..', 'zcall-bridge', 'streamproxy.so');
+  const proxySoPath = zcallBridgePath('streamproxy.so');
   if (!fs.existsSync(proxySoPath)) {
     if (dialogModule) {
       dialogModule.showMessageBox({
@@ -1066,13 +1100,39 @@ function startScreenBridge() {
   }
   const [w, h] = res.split('x');
 
+  // Missing system deps fail silently otherwise (gst then reports
+  // "Could not open display" and the shim cannot reach :99).
+  const missingDeps = [];
+  for (const dep of ['Xvfb', 'python3', 'xdotool']) {
+    try {
+      const r = execSync('which ' + dep, { encoding: 'utf8' });
+      if (!r.trim()) missingDeps.push(dep);
+    } catch (e) { missingDeps.push(dep); }
+  }
+  if (missingDeps.length) {
+    if (dialogModule) {
+      dialogModule.showMessageBox({
+        type: 'error', title: 'Zalo — Chia sẻ màn hình',
+        message: 'Thiếu thành phần hệ thống: ' + missingDeps.join(', '),
+        detail: 'Cài để bật share screen:\n\n' +
+          '  Fedora:  sudo dnf install xorg-x11-server-Xvfb xdotool python3-dbus\n' +
+          '  Ubuntu:  sudo apt install xvfb xdotool python3-dbus\n' +
+          '  Arch:    sudo pacman -S xorg-server-xvfb xdotool python-dbus'
+      });
+    }
+    debugLog('screenbridge: missing system deps: ' + missingDeps.join(', '));
+    return false;
+  }
+
   stopScreenBridge();
   bridgeGranted = false;
   try {
     // Headless Xvfb holds the bridged stream; ZaloCall keeps running on the
     // real display (native UI) and the streamproxy shim redirects its
     // screen-capture reads to this display.
-    bridgeProcs.push(spawn('Xvfb', [BRIDGE_DISPLAY, '-screen', '0', w + 'x' + h + 'x24'], { stdio: 'ignore' }));
+    const xvfb = spawn('Xvfb', [BRIDGE_DISPLAY, '-screen', '0', w + 'x' + h + 'x24'], { stdio: ['ignore', 'ignore', 'pipe'] });
+    xvfb.stderr.on('data', (d) => debugLog('screenbridge xvfb: ' + String(d).trim().slice(0, 200)));
+    bridgeProcs.push(xvfb);
     const py = spawn('python3', [pyPath, BRIDGE_DISPLAY], { stdio: ['ignore', 'ignore', 'pipe'] });
     py.stderr.on('data', (d) => {
       const s = String(d).trim().slice(0, 300);

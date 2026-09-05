@@ -77,6 +77,18 @@ Người dùng **không cần cài gì thủ công**. Ngay lần mở app đầu
 Wine tải về được lưu tại `<userData>/zcall-wine-runtime/` — hoàn toàn trong
 dữ liệu của app, không đụng hệ thống, gỡ app là sạch.
 
+### Biến thể Full (wine đi kèm sẵn)
+
+Release có 2 biến thể **Full** (~430MB) cho cả 2 flavor: portable wine
+được đóng gói sẵn **bên trong AppImage** (`app/native/wine-runtime/`):
+
+- `Zalo-<ver>-<hash>-Full.AppImage` — không ZaDark
+- `Zalo-<ver>+ZaDark-<zdv>-<hash>-Full.AppImage` — có ZaDark
+
+Mở app lần đầu là gọi được ngay — không cần mạng, không cần tải wine.
+Bản thường (~263MB) vẫn giữ luồng tự tải ở trên; tất cả chạy từ cùng
+một code, chỉ khác phần wine đi kèm.
+
 ## Cấu hình Wine (custom path)
 
 Người dùng nâng cao có thể chỉ định wine riêng. Khi app khởi động, plugin
@@ -84,11 +96,14 @@ tự dò theo thứ tự ưu tiên:
 
 ```
 1. Biến môi trường ZCALL_WINE          ← ưu tiên cao nhất (user tự chỉ định)
-2. Wine đã tải tự động                ← <userData>/zcall-wine-runtime/bin/wine
+2. Wine đi kèm app (biến thể Full)    ← app/native/wine-runtime/bin/wine
+                                          trong AppImage — mở là dùng được
+                                          ngay, không cần tải gì thêm
+3. Wine đã tải tự động                ← <userData>/zcall-wine-runtime/bin/wine
                                           (bản app kiểm soát + đã test — nên
                                           dùng để có trải nghiệm đồng nhất)
-3. Lệnh `wine` trong PATH              ← wine hệ thống (apt/dnf install wine...)
-4. Runner Bottles (flatpak)            ← ~/.var/app/com.usebottles.bottles/
+4. Lệnh `wine` trong PATH              ← wine hệ thống (apt/dnf install wine...)
+5. Runner Bottles (flatpak)            ← ~/.var/app/com.usebottles.bottles/
                                           data/bottles/runners/kron4ek-wine-*/
                                           bin/wine (chọn bản mới nhất)
 ```

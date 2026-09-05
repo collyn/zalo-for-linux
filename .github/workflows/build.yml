@@ -93,7 +93,23 @@ jobs:
         name: ${{ steps.build.outputs.zadark_appimage_name }}
         path: ${{ steps.build.outputs.zadark_appimage_file }}
         retention-days: 30
-        
+
+    - name: Upload Full AppImage artifact (wine bundled, ZaDark)
+      if: steps.build.outputs.build == 'true'
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ steps.build.outputs.full_appimage_name }}
+        path: ${{ steps.build.outputs.full_appimage_file }}
+        retention-days: 30
+
+    - name: Upload Full AppImage artifact (wine bundled, no ZaDark)
+      if: steps.build.outputs.build == 'true'
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ steps.build.outputs.plainfull_appimage_name }}
+        path: ${{ steps.build.outputs.plainfull_appimage_file }}
+        retention-days: 30
+
     - name: Create Release
       if: steps.build.outputs.build == 'true'
       uses: softprops/action-gh-release@v1
@@ -102,7 +118,7 @@ jobs:
         name: ${{ steps.build.outputs.zalo_version }}
         body: |
           ## 🚀 How to use
-          
+
           It is recommended to use [Gear Lever](https://github.com/mijorus/gearlever) to manage and integrate the AppImage.
 
           ```bash
@@ -113,16 +129,22 @@ jobs:
           flatpak run it.mijorus.gearlever --integrate ${{ steps.build.outputs.zadark_appimage_name }}
           ```
 
+          > 🍷 **Full variants** (portable wine bundled inside — the call feature, voice/video/share screen, works right after the first launch with no download; larger files ~430MB):
+          > - `${{ steps.build.outputs.plainfull_appimage_name }}` (without ZaDark)
+          > - `${{ steps.build.outputs.full_appimage_name }}` (with ZaDark)
+
           ## 📋 System Requirements
           - Linux x64
           - GLIBC 2.28 or later
-          
+
           ## 🐛 Issues & Support
           Please report issues in the [GitHub Issues](https://github.com/${{ github.repository }}/issues) section.
 
         files: |
           ${{ steps.build.outputs.original_appimage_file }}
           ${{ steps.build.outputs.zadark_appimage_file }}
+          ${{ steps.build.outputs.plainfull_appimage_file }}
+          ${{ steps.build.outputs.full_appimage_file }}
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
