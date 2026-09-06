@@ -42,6 +42,9 @@ jobs:
       with:
         node-version: '22'
         cache: 'npm'
+
+    - name: Setup Rust toolchain
+      uses: dtolnay/rust-toolchain@stable
         
     - name: Cache Electron binaries
       uses: actions/cache@v3
@@ -58,6 +61,17 @@ jobs:
         key: ${{ runner.os }}-zalo-temp-${{ hashFiles('package-lock.json') }}
         restore-keys: |
           ${{ runner.os }}-zalo-temp-
+
+    - name: Cache Cargo registry and build artifacts
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          nativelibs/*/target
+        key: ${{ runner.os }}-cargo-${{ hashFiles('nativelibs/*/Cargo.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-cargo-
           
     - name: Install Node.js dependencies
       run: npm ci --prefer-offline --no-audit
@@ -66,7 +80,7 @@ jobs:
       run: |
         sudo dpkg --add-architecture i386
         sudo apt-get update
-        sudo apt-get install -y liblzma-dev p7zip-full gcc-mingw-w64-i686 gcc gcc-multilib libc6-dev-i386 libx11-dev libxcb1-dev libx11-dev:i386 libxcb1-dev:i386
+        sudo apt-get install -y liblzma-dev p7zip-full gcc-mingw-w64-i686 gcc gcc-multilib libc6-dev-i386 libx11-dev libxcb1-dev libx11-dev:i386 libxcb1-dev:i386 libxext-dev:i386
 
     - name: Setup and Build
       id: build

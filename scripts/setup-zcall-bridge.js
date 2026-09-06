@@ -165,7 +165,7 @@ async function main() {
     } catch (e) {
       throw new Error(
         '32-bit build toolchain is required for streamproxy.so — ' +
-        'install with: sudo apt install gcc-multilib libc6-dev-i386 libx11-dev:i386 libxcb1-dev:i386' +
+        'install with: sudo apt install gcc-multilib libc6-dev-i386 libx11-dev:i386 libxcb1-dev:i386 libxext-dev:i386' +
         ' (gcc said: ' + String(e.stderr || e.message).trim().slice(-300) + ')'
       );
     }
