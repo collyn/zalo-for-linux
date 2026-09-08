@@ -31,32 +31,49 @@ async function main() {
     // silently bloat the standard variants — start clean; Phase 3 re-bundles.
     fs.rmSync(path.join(APP_DIR, 'native', 'wine-runtime'), { recursive: true, force: true });
     fs.rmSync(path.join(APP_DIR, 'native', 'gst-runtime'), { recursive: true, force: true });
+    fs.rmSync(path.join(BASE_DIR, 'temp', 'runtime-stash'), { recursive: true, force: true });
 
-    // Phase 1: Build original Zalo
-    logger.step('PHASE 1: Building Zalo (Original)');
-    await build('(Original)', '');
+    // ZALO_ONLY_FULL=1: skip the two standard variants (dev loop — saves
+    // two electron-builder passes). CI always builds all four.
+    const onlyFull = process.env.ZALO_ONLY_FULL === '1';
+
+    if (!onlyFull) {
+      // Phase 1: Build original Zalo
+      logger.step('PHASE 1: Building Zalo (Original)');
+      await build('(Original)', '');
+    }
 
     // Phase 1.5: Full variant of the original (no ZaDark) — wine bundled.
     logger.step('PHASE 1.5: Building Zalo (Full — wine bundled, no ZaDark)');
     await bundleWineRuntime();
     await bundleGstRuntime();
     await build('(Full — wine bundled)', '-PlainFull');
-    // Remove the runtime again — the standard variants must not contain it,
-    // and a leftover from a previous run would silently bloat them (and the
-    // next Full build) to the Full size.
-    fs.rmSync(path.join(APP_DIR, 'native', 'wine-runtime'), { recursive: true, force: true });
-    fs.rmSync(path.join(APP_DIR, 'native', 'gst-runtime'), { recursive: true, force: true });
+    // STASH the runtimes instead of deleting: the standard variants must not
+    // contain them (Phase 2 builds clean), but Phase 3 needs the same trees —
+    // deleting here used to force a full re-download + re-bundle (94MB wine +
+    // minutes of gst post-extract) every run.
+    const stash = path.join(BASE_DIR, 'temp', 'runtime-stash');
+    fs.mkdirSync(stash, { recursive: true });
+    for (const name of ['wine-runtime', 'gst-runtime']) {
+      const src = path.join(APP_DIR, 'native', name);
+      if (fs.existsSync(src)) fs.renameSync(src, path.join(stash, name));
+    }
 
     // Phase 2: Apply ZaDark integration and build final product
-    logger.step('PHASE 2: Building Zalo (with ZaDark)');
-
-    // Patch ZaDark directly into APP_DIR
+    // Patch ZaDark directly into APP_DIR (needed for the -Full variant too)
     await integrateZaDark();
-    await build('(with ZaDark)', '-ZaDark');
+    if (!onlyFull) {
+      logger.step('PHASE 2: Building Zalo (with ZaDark)');
+      await build('(with ZaDark)', '-ZaDark');
+    }
 
     // Phase 3: Full variant of the ZaDark build — wine bundled, so the call
     // feature works out of the box with no first-run download.
     logger.step('PHASE 3: Building Zalo (Full — wine bundled, with ZaDark)');
+    for (const name of ['wine-runtime', 'gst-runtime']) {
+      const src = path.join(stash, name);
+      if (fs.existsSync(src)) fs.renameSync(src, path.join(APP_DIR, 'native', name));
+    }
     await bundleWineRuntime();
     await bundleGstRuntime();
     await build('(Full — wine bundled)', '-Full');
@@ -65,6 +82,7 @@ async function main() {
     await packageGstAsset();
     fs.rmSync(path.join(APP_DIR, 'native', 'wine-runtime'), { recursive: true, force: true });
     fs.rmSync(path.join(APP_DIR, 'native', 'gst-runtime'), { recursive: true, force: true });
+    fs.rmSync(path.join(BASE_DIR, 'temp', 'runtime-stash'), { recursive: true, force: true });
 
     // Final summary
     logger.step('BUILD SUMMARY');
@@ -208,13 +226,18 @@ async function bundleGstRuntime() {
   const script = [
     'set -e',
     'export DEBIAN_FRONTEND=noninteractive',
-    'apt-get update -qq',
+    // GitHub runners are Azure VMs: the azure mirror is far faster than
+    // archive.ubuntu.com, and ForceIPv4 sidesteps the broken-IPv6-route
+    // crawling (68-300 kB/s instead of MB/s) that hits CI apt regularly.
+    'sed -i "s|http://archive.ubuntu.com/ubuntu|http://azure.archive.ubuntu.com/ubuntu|; s|http://security.ubuntu.com/ubuntu|http://azure.archive.ubuntu.com/ubuntu|" /etc/apt/sources.list',
+    'apt-get -o Acquire::ForceIPv4=true update -qq',
     // Fresh extract, but KEEP /out/cache: CI restores the deb cache there
     // and apt re-uses it (matching checksums skip the re-download).
     'rm -rf /out/root /out/cache-py /out/cache-pw',
     'mkdir -p /out/cache/partial /out/cache-py /out/cache-pw /out/root',
-    // Silences "Download is performed unsandboxed as root" noise.
-    'APT() { apt-get -o APT::Sandbox::User=root "$@"; }',
+    // Silences "Download is performed unsandboxed as root" noise; IPv4-only
+    // for the same CI speed reason as the update above.
+    'APT() { apt-get -o APT::Sandbox::User=root -o Acquire::ForceIPv4=true "$@"; }',
     // ---- Phase 1: gst runtime + X bridge stack (not installed in the
     // ---- image, so the full closure lands: xserver-common, xkb-data,
     // ---- libxfont2, libpixman, libxdo3, ...).
@@ -259,13 +282,16 @@ async function bundleGstRuntime() {
     // cache before extraction. `install --download-only` can silently skip
     // packages that apt deems satisfied (installed in the image, alternative
     // providers, restored-cache quirks) — fetch any missing one explicitly.
+    // BATCHED (2 apt invocations total): per-package calls made this step
+    // exceed the CI step timeout on cold caches.
+    'missing=""',
     'for p in $(cat /out/keep.txt); do',
-    '  if ! ls /out/cache/${p}_*.deb /out/cache-py/${p}_*.deb /out/cache-pw/${p}_*.deb >/dev/null 2>&1; then',
-    // Guard against virtual packages / names with no downloadable deb:
-    // only fetch when apt actually knows a real candidate for the name.
-    '    apt-cache show "$p" >/dev/null 2>&1 && (cd /out/cache && APT download "$p");',
-    '  fi',
+    '  ls /out/cache/${p}_*.deb /out/cache-py/${p}_*.deb /out/cache-pw/${p}_*.deb >/dev/null 2>&1 || missing="$missing $p";',
     'done',
+    // One availability check for the whole missing set (filters virtuals),
+    // then ONE download invocation for all real packages.
+    'avail=$(apt-cache show $missing 2>/dev/null | grep "^Package: " | awk \'{print $2}\' | sort -u)',
+    'if [ -n "$avail" ]; then (cd /out/cache && APT download $avail); fi',
     'for f in /out/cache/*.deb /out/cache-py/*.deb /out/cache-pw/*.deb; do',
     '  n=$(dpkg-deb -f "$f" Package 2>/dev/null || true)',
     '  if grep -qxF "$n" /out/keep.txt; then dpkg-deb -x "$f" /out/root; fi',
@@ -301,7 +327,7 @@ async function bundleGstRuntime() {
         `docker run --rm -e HOST_UID=${process.getuid()} -e HOST_GID=${process.getgid()} ` +
         `-e BUNDLE_STAMP=${BUNDLE_STAMP} ` +
         `-v "${stage}:/out" ubuntu:22.04 bash /out/fetch-gst.sh`, {
-          cwd: BASE_DIR, stdio: 'inherit', timeout: 900000
+          cwd: BASE_DIR, stdio: 'inherit', timeout: 1800000
         });
     } catch (e) {
       logger.warn('docker unavailable or failed — Full variant built WITHOUT bundled GStreamer ' +
@@ -664,10 +690,12 @@ async function packageGstAsset() {
   const name = `gst-runtime-${ZALO_VERSION || 'unknown'}.tar.xz`;
   const file = path.join(BASE_DIR, 'dist', name);
   logger.info('Packaging GStreamer runtime release asset: dist/' + name + ' ...');
-  // xz default level: ~340MB tree, mostly binary — roughly 30-90s on CI.
-  // Size matters (every standard user downloads this), speed does not.
+  // xz level 2: level 6 would take 3-5 min on the ~640MB tree for only a
+  // few percent smaller asset — build speed wins, size delta is negligible.
   fs.mkdirSync(path.join(BASE_DIR, 'dist'), { recursive: true });
-  execSync(`tar -cJf "${file}" -C "${target}" .`, { cwd: BASE_DIR, stdio: 'pipe' });
+  execSync(`tar -cJf "${file}" -C "${target}" .`, {
+    cwd: BASE_DIR, stdio: 'pipe', env: Object.assign({}, process.env, { XZ_OPT: '-2' })
+  });
   logger.success('gst release asset: ' + name + ' (' + Math.round(fs.statSync(file).size / 1024 / 1024) + 'MB)');
   if (process.env.GITHUB_OUTPUT) {
     fs.appendFileSync(process.env.GITHUB_OUTPUT, `gst_runtime_file=${'dist/' + name}\ngst_runtime_name=${name}\n`);
