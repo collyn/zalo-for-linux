@@ -109,9 +109,14 @@ const REPLACEMENTS = [
   // 10. Wayland screen-share bridge: preload the streamproxy shim (when the
   //     plugin set ZCALL_PROXY_SO) so ZaloCall's screen-capture reads are
   //     served from the bridge display while the app itself stays native.
+  //     Also compose the bundled-64-bit-GStreamer env (Full variants) from
+  //     ZCALL_GST_RUNTIME — ONLY for this spawn, never globally (leaking
+  //     LD_LIBRARY_PATH/GST_* into screenbridge/validate/wineboot would
+  //     break them). The ternary yields null when no bundle: Object.assign
+  //     skips null, so non-Full spawns stay byte-identical to the original.
   {
     from: '[e,"\\\\\\\\.\\\\pipe\\\\PipeZCallRecv","\\\\\\\\.\\\\pipe\\\\PipeZCallSend"]))',
-    to: '[e,"\\\\\\\\.\\\\pipe\\\\PipeZCallRecv","\\\\\\\\.\\\\pipe\\\\PipeZCallSend"],{env:Object.assign({},process.env,{LD_PRELOAD:process.env.ZCALL_PROXY_SO||process.env.LD_PRELOAD||""})}))',
+    to: '[e,"\\\\\\\\.\\\\pipe\\\\PipeZCallRecv","\\\\\\\\.\\\\pipe\\\\PipeZCallSend"],{env:Object.assign({},process.env,{LD_PRELOAD:process.env.ZCALL_PROXY_SO||process.env.LD_PRELOAD||""},process.env.ZCALL_GST_RUNTIME?{LD_LIBRARY_PATH:process.env.ZCALL_GST_RUNTIME+"/usr/lib/x86_64-linux-gnu"+(process.env.LD_LIBRARY_PATH?":"+process.env.LD_LIBRARY_PATH:""),GST_PLUGIN_PATH:process.env.ZCALL_GST_RUNTIME+"/usr/lib/x86_64-linux-gnu/gstreamer-1.0",GST_PLUGIN_SYSTEM_PATH:process.env.ZCALL_GST_RUNTIME+"/system",GST_REGISTRY:process.env.ZCALL_GST_REGISTRY||""}:null)}))',
   },
   {
     from: 'e.on("data",(e=>{z(e)})),e.on("end"',

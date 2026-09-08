@@ -15,14 +15,16 @@
  *      actually running a 32-bit exe (pipebridge --version).
  *   2. If no usable wine exists on first run, ASKS the user (always-on-top
  *      window with browse/download options) and downloads a portable wine
- *      (~54MB) into <userData>/zcall-wine-runtime/ with a progress window —
- *      no root needed, works on any distro.
+ *      (wow64 11.14, ~94MB) into <userData>/zcall-wine-runtime/ AND a
+ *      64-bit GStreamer tree (release asset, ~120MB) into
+ *      <userData>/zcall-gst-runtime/ with a progress window — no root
+ *      needed, no host 32-bit libs, works on any distro.
  *   3. Ensures the wine prefix exists (wineboot), exports
  *      ZCALL_WINE / ZCALL_WINEPREFIX / WINEDEBUG into process.env.
  *   4. On quit, kills the whole wine session of our prefix; on launch,
  *      sweeps stale wine processes of unclean previous exits.
  *   5. Tray menu "Cài đặt gọi điện…" opens a settings window: browse/clear/
- *      remove wine.
+ *      remove wine (+ downloaded GStreamer).
  *
  * Configuration (env vars):
  *   ZCALL_WINE                 wine binary (highest priority)
@@ -30,6 +32,15 @@
  *   ZCALL_DISABLE              set to anything to skip entirely
  *   ZCALL_AUTO_SETUP           '1' to download wine silently (no dialog)
  *   ZCALL_WINE_DOWNLOAD_URL    override the portable wine download URL
+ *   ZCALL_GST_DOWNLOAD_URL     override the GStreamer release-asset URL
+ *   ZCALL_GST_RUNTIME          override the bundled 64-bit GStreamer tree
+ *                              (Full variants; consumed by the patched
+ *                              ZaloCall spawn — never set globally)
+ *   ZCALL_GST_REGISTRY         private gst registry file (default:
+ *                              <userData>/gst-registry-64.bin)
+ *   ZCALL_GST_REGISTRY_BRIDGE  separate registry for the bridge's bundled
+ *                              gst-launch/gst-inspect (default:
+ *                              <userData>/gst-registry-bridge-64.bin)
  */
 
 'use strict';
@@ -40,14 +51,22 @@ const os = require('os');
 const path = require('path');
 const https = require('https');
 
-// Recommended build: 11.14 (96MB / ~850MB). Video calls verified working on
-// it; wine 8.6 is lighter (54MB) but its msvcp140/ucrtbase lack
-// _Throw_C_error, which crashes ZaloCall when the video pipeline hits an
+// Recommended build: 11.14 wow64 (~94MB / ~850MB extracted). Video calls
+// verified working on it; wine 8.6 is lighter (54MB) but its msvcp140/ucrtbase
+// lack _Throw_C_error, which crashes ZaloCall when the video pipeline hits an
 // error (e.g. codec/format negotiation).
+// NOTE: this is the SAME pure-wow64 build the Full variants bundle (see
+// WINE_DOWNLOAD_URL_WOW64 in scripts/build.js) — a downloaded wine therefore
+// needs NO host 32-bit libraries. Keep the two constants in sync.
 const WINE_DOWNLOAD_URL =
-  'https://github.com/Kron4ek/Wine-Builds/releases/download/11.14/wine-11.14-amd64.tar.xz';
+  'https://github.com/Kron4ek/Wine-Builds/releases/download/11.14/wine-11.14-amd64-wow64.tar.xz';
 const RUNTIME_DIRNAME = 'zcall-wine-runtime';
 const CONFIG_FILENAME = 'zcall-config.json';
+const GST_DIRNAME = 'zcall-gst-runtime';
+const GST_TARBALL_NAME = 'zcall-gst-download.tar.xz';
+const GST_RUNTIME_MARKER = path.join('usr', 'lib', 'x86_64-linux-gnu', 'libgstreamer-1.0.so.0');
+// Ask-window/progress text; measured from a real CI build (dist asset).
+const GST_DOWNLOAD_MB = 96;
 
 let dialogModule = null;
 let BrowserWindowModule = null;
@@ -127,6 +146,71 @@ function findBundledWine() {
 }
 
 /**
+ * Bundled 64-bit GStreamer tree. Resolution order:
+ *  1. env ZCALL_GST_RUNTIME (exported by launch()/promptAndInstall — being
+ *     env-first is what lets bridgeTools(), which passes no userDataDir,
+ *     pick up a downloaded tree automatically)
+ *  2. Full variants: app/native/gst-runtime (packaged/dev layouts)
+ *  3. standard variants: <userData>/zcall-gst-runtime (first-run download)
+ * Returns null when none exists — the call spawn then falls back to the
+ * host's 64-bit GStreamer.
+ */
+function findBundledGstRuntime(userDataDir) {
+  if (process.env.ZCALL_GST_RUNTIME) return process.env.ZCALL_GST_RUNTIME;
+  const hasMarker = (root) => fs.existsSync(path.join(root, GST_RUNTIME_MARKER));
+  const bundled = [
+    path.join(path.dirname(process.execPath), 'app', 'native', 'gst-runtime'),
+    path.join(__dirname, '..', '..', 'app', 'native', 'gst-runtime')
+  ].find(hasMarker);
+  if (bundled) return bundled;
+  if (userDataDir && hasMarker(path.join(userDataDir, GST_DIRNAME))) {
+    return path.join(userDataDir, GST_DIRNAME);
+  }
+  return null;
+}
+
+/**
+ * Which LD_PRELOAD shim matches this wine build?
+ *  - classic wine keeps 32-bit unixlibs — the ZaloCall process is 32-bit,
+ *    only a 32-bit shim can intercept.
+ *  - pure wow64 hosts the 32-bit PE in ONE 64-bit process — only a 64-bit
+ *    shim can intercept there.
+ * Decision rule: 64-bit ONLY on positive wow64 evidence — an adjacent
+ * lib/wine tree that HAS x86_64-unix and has NO i386-unix (Kron4ek wow64
+ * layout of the bundled/downloaded runtimes). Everything else (classic
+ * trees, distro system wines whose unixlibs live elsewhere like
+ * /usr/lib/i386-linux-gnu/wine, unknown paths) keeps the 32-bit shim —
+ * exactly today's behavior. A wrong-class preload never breaks the app
+ * (loader refuses it), but a wrong 64-bit choice silently disables screen
+ * proxying, so defaulting conservative is the right trade.
+ */
+function selectProxySo(winePath) {
+  const libWine = path.join(path.dirname(winePath), '..', 'lib', 'wine');
+  const wow64Pure =
+    fs.existsSync(path.join(libWine, 'x86_64-unix')) &&
+    !fs.existsSync(path.join(libWine, 'i386-unix'));
+  const name = wow64Pure ? 'streamproxy-x86_64.so' : 'streamproxy.so';
+  return zcallBridgePath(name);
+}
+
+/**
+ * Single assignment point for "which wine + which shim is live". Used by the
+ * launch() winner and all mid-session wine-change sites so ZCALL_PROXY_SO
+ * can never go stale when the user switches wine from the settings dialog.
+ */
+function applyWineEnv(wine, prefix) {
+  process.env.ZCALL_WINE = wine;
+  process.env.ZCALL_WINEPREFIX = prefix;
+  // Wine itself reads WINEPREFIX — without this, the patched pipebridge/
+  // ZaloCall spawns (which inherit process.env) would fall back to the
+  // DEFAULT prefix and silently create ~/.wine on the first call.
+  process.env.WINEPREFIX = prefix;
+  if (!process.env.WINEDEBUG) process.env.WINEDEBUG = '-all';
+  const proxy = selectProxySo(wine);
+  if (fs.existsSync(proxy)) process.env.ZCALL_PROXY_SO = proxy;
+}
+
+/**
  * Verify that this wine can actually run 32-bit executables (ZaloCall is a
  * PE32 binary). Runs pipebridge.exe --version (a 32-bit exe) with a timeout.
  * Returns true only when it prints the expected output.
@@ -178,10 +262,15 @@ function validateWine(winePath, prefix) {
     debugLog('validate: pipebridge.exe not found (resourcesPath=' + (process.resourcesPath || '') + ')');
     return false;
   }
-  // Use a dedicated throwaway prefix: validating against the real prefix can
-  // trigger slow version upgrade/downgrade passes (10-30s+) or corrupt state,
-  // and a cold first run needs a generous timeout.
-  const valPrefix = prefix + '-validate';
+  // Validate directly against the REAL prefix — it already exists at this
+  // point (wineboot ran first in the launch loop, and the settings-dialog
+  // path has a prefix from the first launch), so there is no cold-creation
+  // cost. A separate throwaway prefix used to be created here, but wine
+  // auto-initializes a missing prefix on first process start — that cost
+  // ~935MB of writes per launch and the prefix it protected was already
+  // touched by wineboot anyway. A version upgrade/downgrade pass, if any,
+  // would happen identically at the first real call with that wine.
+  const valPrefix = prefix;
   try {
     const res = spawnSync(winePath, [pipebridgePath, '--version'], {
       env: Object.assign({}, process.env, { WINEPREFIX: valPrefix, WINEDEBUG: '-all' }),
@@ -295,6 +384,86 @@ async function installDownloadedWine(userDataDir, onProgress) {
   return wine;
 }
 
+/**
+ * Which GitHub repo hosts this build's release assets? Baked into
+ * app/pc-dist/build-info.json at build time (CI: github.repository; local
+ * builds: parsed from the origin remote) — so forks and the upstream repo
+ * each host their own gst-runtime asset automatically, with no hardcoded
+ * owner. Missing/old builds -> null -> non-fatal system-gst fallback.
+ */
+function buildInfoRepository() {
+  const candidates = [
+    path.join(path.dirname(process.execPath), 'app', 'pc-dist', 'build-info.json'),
+    path.join(__dirname, '..', '..', 'app', 'pc-dist', 'build-info.json'),
+  ];
+  for (const p of candidates) {
+    try {
+      const info = JSON.parse(fs.readFileSync(p, 'utf8'));
+      if (info && info.repository && /^[\w.-]+\/[\w.-]+$/.test(info.repository)) return info.repository;
+    } catch (e) { /* none */ }
+  }
+  return null;
+}
+
+function gstDownloadUrl() {
+  if (process.env.ZCALL_GST_DOWNLOAD_URL) return process.env.ZCALL_GST_DOWNLOAD_URL;
+  const repo = buildInfoRepository();
+  if (!repo) {
+    debugLog('gst: no release repository in build-info.json — using system 64-bit gst');
+    return null;
+  }
+  try {
+    // Safe: installs only run after app 'ready' (main.js); in the packaged
+    // app this is the Zalo version = the release tag the asset is attached to.
+    const ver = require('electron').app.getVersion();
+    if (ver) return `https://github.com/${repo}/releases/download/${ver}/gst-runtime-${ver}.tar.xz`;
+  } catch (e) { /* not inside Electron (unit tests) */ }
+  return null;
+}
+
+/**
+ * First-run companion download (standard variants): the same 64-bit
+ * GStreamer + Wayland-bridge tree the Full variants ship, published as a
+ * per-version release asset. NON-FATAL: dev builds and old releases have no
+ * asset — on any failure we return null and calls keep working with the
+ * host's 64-bit gst (camera/share degraded, voice/video core unaffected).
+ */
+async function installDownloadedGst(userDataDir, onProgress) {
+  const url = gstDownloadUrl();
+  if (!url) {
+    debugLog('gst: no download URL (electron/version unavailable) — using system 64-bit gst');
+    return null;
+  }
+  const gstDir = path.join(userDataDir, GST_DIRNAME);
+  const tarball = path.join(userDataDir, GST_TARBALL_NAME);
+  fs.mkdirSync(userDataDir, { recursive: true });
+  try {
+    await downloadFile(url, tarball, onProgress);
+    fs.mkdirSync(gstDir, { recursive: true });
+    execSync(`tar -xf "${tarball}" -C "${gstDir}" --strip-components=1`, { stdio: 'pipe' });
+    fs.unlinkSync(tarball);
+  } catch (e) {
+    try { fs.unlinkSync(tarball); } catch (_) { /* none */ }
+    try { fs.rmSync(gstDir, { recursive: true, force: true }); } catch (_) { /* none */ }
+    debugLog('gst download FAILED (non-fatal): ' + String((e && e.message) || e));
+    return null;
+  }
+  if (!fs.existsSync(path.join(gstDir, GST_RUNTIME_MARKER))) {
+    // Never adopt a partial tree — discard so findBundledGstRuntime stays null.
+    try { fs.rmSync(gstDir, { recursive: true, force: true }); } catch (_) { /* none */ }
+    debugLog('gst: marker missing after extract — tree discarded');
+    return null;
+  }
+  return gstDir;
+}
+
+/** Single assignment point for the bundled/downloaded GStreamer env. */
+function exportGstEnv(userDataDir, gstDir) {
+  process.env.ZCALL_GST_RUNTIME = gstDir;
+  process.env.ZCALL_GST_REGISTRY = path.join(userDataDir, 'gst-registry-64.bin');
+  process.env.ZCALL_GST_REGISTRY_BRIDGE = path.join(userDataDir, 'gst-registry-bridge-64.bin');
+}
+
 // ---------------------------------------------------------------------------
 // Friendly setup UI (ask -> progress window -> notification)
 // ---------------------------------------------------------------------------
@@ -309,7 +478,7 @@ function showAskWindow(failedWine) {
   const { ipcMain } = require('electron');
   const win = new BrowserWindowModule({
     width: 540,
-    height: 280,
+    height: failedWine ? 360 : 280,
     frame: false,
     resizable: false,
     movable: true,
@@ -323,11 +492,18 @@ function showAskWindow(failedWine) {
   const headLine = failedWine
     ? 'Wine trên máy bạn không tương thích với tính năng gọi (không chạy được ứng dụng 32-bit). Tải bản Wine tương thích?'
     : 'Tính năng gọi điện cần Wine. Tải và bật ngay bây giờ?';
+  // A failed system/custom wine candidate brought us here — show the
+  // distro-specific 32-bit lib hint for that manual path.
+  let hintHtml = '';
+  if (failedWine) {
+    try { hintHtml = '<pre id="hint">' + getI386InstallHint().command.replace(/</g, '&lt;') + '</pre>'; } catch (e) { /* none */ }
+  }
   const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
     body{font-family:sans-serif;background:#1f1f1f;color:#eee;margin:0;padding:20px 24px;-webkit-app-region:drag}
     h3{margin:0 0 8px;font-size:16px}
     p{font-size:13px;color:#ccc;margin:0 0 10px;line-height:1.45}
     #url{font-size:11px;color:#6ab;text-overflow:ellipsis;overflow:hidden;white-space:nowrap;cursor:pointer;margin-bottom:14px;-webkit-app-region:no-drag}
+    #hint{font-size:11px;color:#aaa;background:#262626;padding:8px 10px;border-radius:6px;margin:0 0 12px;white-space:pre-wrap;-webkit-app-region:no-drag}
     label{font-size:13px;color:#ccc;display:block;margin-bottom:16px;-webkit-app-region:no-drag}
     .row{display:flex;justify-content:flex-end;gap:10px;-webkit-app-region:no-drag}
     button{font-size:13px;padding:8px 18px;border-radius:6px;border:none;cursor:pointer}
@@ -336,8 +512,10 @@ function showAskWindow(failedWine) {
   </style></head><body>
     <h3>Zalo — Tính năng gọi điện</h3>
     <p>${headLine}<br>
-       Sẽ tải ~54MB về lưu trong dữ liệu của Zalo — không cần quyền quản trị,
-       không ảnh hưởng hệ thống.</p>
+       Sẽ tải ~94MB (Wine) + ~${GST_DOWNLOAD_MB}MB (GStreamer) về lưu trong dữ liệu
+       của Zalo — không cần quyền quản trị, không cài gì vào hệ thống.
+       Cần ~2GB ổ đĩa trống để giải nén.</p>
+    ${hintHtml}
     <div id="url" title="Mở nguồn tải trong trình duyệt">Nguồn tải: ${downloadUrl}</div>
     <label><input type="checkbox" id="never"> Không hỏi lại lần sau nếu không tải</label>
     <div class="row" style="justify-content:space-between">
@@ -421,7 +599,7 @@ function showProgressWindow() {
     #url{font-size:11px;color:#6ab;margin-top:8px;text-overflow:ellipsis;overflow:hidden;white-space:nowrap;cursor:pointer}
   </style></head><body>
     <h3>Zalo — Tính năng gọi điện</h3>
-    <p>Đang tải Wine (~54MB), vui lòng chờ…</p>
+    <p>Đang chuẩn bị tính năng gọi điện (Wine + GStreamer), vui lòng chờ…</p>
     <progress id="bar" max="100" value="0"></progress>
     <div id="label">0%</div>
     <div id="url" title="Mở nguồn tải trong trình duyệt">${downloadUrl}</div>
@@ -465,9 +643,7 @@ async function promptAndInstall(userDataDir, failedWine) {
     if (result.pickedWine) {
       const prefix = process.env.ZCALL_WINEPREFIX || path.join(userDataDir, 'zcall-wine');
       writeConfig(userDataDir, { wineSetup: 'ready', winePath: result.pickedWine });
-      process.env.ZCALL_WINE = result.pickedWine;
-      process.env.ZCALL_WINEPREFIX = prefix;
-      if (!process.env.WINEDEBUG) process.env.WINEDEBUG = '-all';
+      applyWineEnv(result.pickedWine, prefix);
       console.log('[zcall-bridge] custom wine selected:', result.pickedWine);
       return result.pickedWine;
     }
@@ -480,41 +656,51 @@ async function promptAndInstall(userDataDir, failedWine) {
   try {
     debugLog('install: starting download of portable wine');
     let lastUpdate = 0;
-    const wine = await installDownloadedWine(userDataDir, (got, total) => {
+    const stageText = (label) => (got, total) => {
       const now = Date.now();
       if (now - lastUpdate < 500) return; // throttle IPC updates
       lastUpdate = now;
-      const pct = Math.round((got / total) * 100);
-      progress.set(pct, `Đang tải… ${Math.round(got / 1024 / 1024)}MB / ${Math.round(total / 1024 / 1024)}MB (${pct}%)`);
-    });
-    debugLog('install: downloaded, extracting...');
-    progress.set(100, 'Đang giải nén và chuẩn bị…');
+      const pct = total ? Math.round((got / total) * 100) : 0;
+      progress.set(pct, `${label}: ${Math.round(got / 1024 / 1024)}MB / ${Math.round(total / 1024 / 1024)}MB (${pct}%)`);
+    };
+    const wine = await installDownloadedWine(userDataDir, stageText('Đang tải Wine'));
+    debugLog('install: wine downloaded, extracting...');
+    progress.set(100, 'Đang giải nén Wine…');
+
+    // Companion 64-bit GStreamer tree (standard variants). Skipped when a
+    // bundle is already live (Full variant: env exported by launch()).
+    let gstDir = null;
+    if (!findBundledGstRuntime(userDataDir)) {
+      progress.set(0, 'Đang tải GStreamer…');
+      gstDir = await installDownloadedGst(userDataDir, stageText('Đang tải GStreamer'));
+      progress.set(100, gstDir ? 'Đang giải nén GStreamer…' : 'Không tải được GStreamer (sẽ dùng bản hệ thống)');
+    }
 
     // First prefix init (~10-30s, done once)
     const prefix = process.env.ZCALL_WINEPREFIX || path.join(userDataDir, 'zcall-wine');
+    progress.set(0, 'Đang khởi tạo lần đầu (wineboot)…');
     spawnSync(wine, ['wineboot', '-u'], {
       env: Object.assign({}, process.env, { WINEPREFIX: prefix, WINEDEBUG: '-all' }),
       stdio: 'ignore',
       timeout: 180000
     });
 
-    // Verify the freshly downloaded wine actually works on this machine —
-    // classic wine builds need 32-bit libraries that some systems do not
-    // have.
+    // Verify the freshly downloaded wine actually works on this machine.
+    // wow64 needs no 32-bit libraries — a failure here is a machine-level
+    // issue (too-old glibc, corrupt download, ...).
     if (!validateWine(wine, prefix)) {
-      const hint = getI386InstallHint();
       throw new Error(
-        'Wine không chạy được trên máy này — cần thư viện 32-bit.\n\n' +
-        hint.title + '\n' + hint.command
+        'Wine tải về không chạy được trên máy này (bản wow64 không cần thư viện 32-bit).\n\n' +
+        'Thử: Cài đặt gọi điện → "Xóa Wine + GStreamer đã tải về" rồi tải lại.\n' +
+        'Nếu vẫn lỗi: máy thiếu glibc ≥ 2.35 hoặc file tải về bị hỏng.'
       );
     }
 
     progress.close();
-    debugLog('install: SUCCESS wine=' + wine + ' prefix=' + prefix);
+    debugLog('install: SUCCESS wine=' + wine + ' gst=' + (gstDir || 'system') + ' prefix=' + prefix);
 
-    process.env.ZCALL_WINE = wine;
-    process.env.ZCALL_WINEPREFIX = prefix;
-    if (!process.env.WINEDEBUG) process.env.WINEDEBUG = '-all';
+    applyWineEnv(wine, prefix);
+    if (gstDir) exportGstEnv(userDataDir, gstDir);
     writeConfig(userDataDir, { wineSetup: 'ready' });
 
     if (NotificationModule && NotificationModule.isSupported()) {
@@ -549,8 +735,24 @@ function launch({ userDataDir }) {
 
   const prefix = process.env.ZCALL_WINEPREFIX || path.join(userDataDir, 'zcall-wine');
 
+  // Bundled/downloaded 64-bit GStreamer (Full bundle or standard-variant
+  // first-run download). Wine-independent: exported once here (before the
+  // candidate loop so the deferred promptAndInstall path gets it too); the
+  // patched ZaloCall spawn composes LD_LIBRARY_PATH and GST_* from it.
+  // Never set those vars globally — they would leak into
+  // screenbridge/validate/wineboot spawns.
+  const gstRuntime = findBundledGstRuntime(userDataDir);
+  if (gstRuntime) exportGstEnv(userDataDir, gstRuntime);
+
   // Clean stale wine processes from unclean previous exits
   sweepStaleProcesses(prefix);
+
+  // A crashed previous run can leave the throwaway validation prefix behind
+  // (100-300MB) — its wineserver matched the sweep pattern above, so the
+  // directory should be removable now.
+  try {
+    fs.rmSync(prefix + '-validate', { recursive: true, force: true });
+  } catch (e) { /* locked — will be retried on a later launch */ }
 
   // Candidate wines, best first: explicit env -> user-picked custom wine ->
   // our portable runtime (version we control and test) -> system wine ->
@@ -602,14 +804,15 @@ function launch({ userDataDir }) {
   if (!wine) {
     const cfg = readConfig(userDataDir);
 
-    // Downloaded runtime exists but cannot run (machine lacks 32-bit
-    // libraries): re-downloading would loop forever — guide the user
-    // instead, once, without nagging every launch.
+    // Downloaded runtime exists but cannot run: re-downloading would loop
+    // forever — guide the user instead, once, without nagging every launch.
+    // (wow64 needs no 32-bit libs, so this is a machine-level failure —
+    // too-old glibc, corrupt download — with a delete-and-redownload path.)
     if (downloadedWine && failedWine === downloadedWine) {
-      console.error('[zcall-bridge] downloaded wine broken (missing 32-bit libs?)');
+      console.error('[zcall-bridge] downloaded wine broken');
       if (cfg.wineSetup !== 'broken' && process.env.ZCALL_AUTO_SETUP !== '1') {
         writeConfig(userDataDir, { wineSetup: 'broken' });
-        showBrokenWineDialog(downloadedWine);
+        showBrokenWineDialog(userDataDir, downloadedWine);
       }
       return false;
     }
@@ -628,19 +831,17 @@ function launch({ userDataDir }) {
     return false;
   }
 
-  // Export for the patched main-dist spawn code
-  process.env.ZCALL_WINE = wine;
-  process.env.ZCALL_WINEPREFIX = prefix;
-  if (!process.env.WINEDEBUG) process.env.WINEDEBUG = '-all';
+  // Export for the patched main-dist spawn code (also picks the matching
+  // shim: 64-bit for pure-wow64 wines like the bundled Full runtime, 32-bit
+  // for classic wines).
+  applyWineEnv(wine, prefix);
 
   // Streamproxy: the capture shim is preloaded into the helper at ALL times.
   // It is inert while the bridge display is down (captures fall through to
   // the real display) and it signals a share request via a file, which the
   // watcher below turns into an automatic bridge start — no tray click
   // needed when the user hits "Share screen".
-  const proxySo = zcallBridgePath('streamproxy.so');
-  if (fs.existsSync(proxySo)) {
-    process.env.ZCALL_PROXY_SO = proxySo;
+  if (process.env.ZCALL_PROXY_SO) {
     process.env.ZCALL_PROXY_LOG = path.join(os.homedir(), '.config', 'ZaloData', 'zcall-proxy.log');
     process.env.ZCALL_PROXY_REQUEST = path.join(os.homedir(), '.config', 'ZaloData', 'zcall-share.request');
     // Warm the resolution cache now so the first share-screen request does
@@ -708,19 +909,25 @@ function getI386InstallHint() {
   };
 }
 
-function showBrokenWineDialog(winePath) {
+function showBrokenWineDialog(userDataDir, winePath) {
   getElectronModules();
   if (!dialogModule) return;
-  const hint = getI386InstallHint();
   const parent = BrowserWindowModule.getFocusedWindow() || BrowserWindowModule.getAllWindows()[0];
   dialogModule.showMessageBox(parent, {
     type: 'warning',
     title: 'Zalo — Tính năng gọi điện',
-    message: 'Wine không chạy được trên máy này',
-    detail: 'Wine cần các thư viện 32-bit mà máy bạn chưa có.\n\n' +
-      hint.title + '\n' + hint.command +
-      '\n\nSau khi cài xong, khởi động lại Zalo là gọi được.\n\n' +
-      'Wine đã tải: ' + winePath
+    message: 'Wine tải về không chạy được trên máy này',
+    detail: 'Bản wine tải về (wow64) không cần thư viện 32-bit — lỗi thường do ' +
+      'hệ thống quá cũ (cần glibc ≥ 2.35) hoặc file bị hỏng khi tải.\n\n' +
+      'Hãy xóa bản cũ và tải lại.\n' +
+      'Wine đã tải: ' + winePath,
+    buttons: ['Xóa và tải lại', 'Để sau'],
+    defaultId: 1,
+    cancelId: 1
+  }).then(({ response }) => {
+    if (response !== 0) return;
+    try { fs.rmSync(path.join(userDataDir, RUNTIME_DIRNAME), { recursive: true, force: true }); } catch (_) { /* none */ }
+    promptAndInstall(userDataDir);
   });
 }
 
@@ -757,9 +964,9 @@ function openSetupDialog({ userDataDir }) {
       <button id="setpath">Dùng đường dẫn này</button>
     </div>
     <button id="browse">Chọn file wine khác…</button>
-    <button id="download">Tải wine về (~54MB)</button>
+    <button id="download">Tải Wine + GStreamer về (~250MB)</button>
     <button id="clear">Bỏ lựa chọn wine đã lưu</button>
-    <button id="remove">Xóa wine đã tải về khỏi máy</button>
+    <button id="remove">Xóa Wine + GStreamer đã tải về khỏi máy</button>
     <button id="close">Đóng</button>
     <script>
       const {ipcRenderer} = require('electron');
@@ -787,6 +994,9 @@ function openSetupDialog({ userDataDir }) {
     let text = w
       ? 'Wine đang dùng: ' + w + (cfg.winePath ? '\n(Lựa chọn đã lưu: ' + cfg.winePath + ')' : '')
       : 'Chưa có wine — tính năng gọi chưa hoạt động.';
+    if (findDownloadedWine(userDataDir) && !findBundledGstRuntime(userDataDir)) {
+      text += '\n(GStreamer 64-bit chưa tải — camera/share sẽ dùng gst hệ thống)';
+    }
     try { win.webContents.send('zcall-cfg-status', text); } catch (e) { /* closed */ }
   };
   pushStatus();
@@ -799,8 +1009,7 @@ function openSetupDialog({ userDataDir }) {
         if (!chosen) return;
         if (validateWine(chosen, prefix)) {
           writeConfig(userDataDir, { wineSetup: 'ready', winePath: chosen });
-          process.env.ZCALL_WINE = chosen;
-          process.env.ZCALL_WINEPREFIX = prefix;
+          applyWineEnv(chosen, prefix);
           pushStatus();
           new NotificationModule({ title: 'Zalo', body: 'Đã chọn wine: ' + chosen }).show();
         } else {
@@ -840,8 +1049,7 @@ function openSetupDialog({ userDataDir }) {
         return;
       }
       writeConfig(userDataDir, { wineSetup: 'ready', winePath: typed });
-      process.env.ZCALL_WINE = typed;
-      process.env.ZCALL_WINEPREFIX = prefix;
+      applyWineEnv(typed, prefix);
       pushStatus();
       dialogModule.showMessageBox(win, {
         type: 'info', title: 'Zalo — Tính năng gọi điện',
@@ -877,7 +1085,8 @@ function openSetupDialog({ userDataDir }) {
     }
     if (cmd === 'zcall-cfg-remove') {
       const runtime = path.join(userDataDir, RUNTIME_DIRNAME);
-      if (!fs.existsSync(runtime)) {
+      const gstRuntime = path.join(userDataDir, GST_DIRNAME);
+      if (!fs.existsSync(runtime) && !fs.existsSync(gstRuntime)) {
         dialogModule.showMessageBox(win, {
           type: 'info', title: 'Zalo — Tính năng gọi điện',
           message: 'Không có wine đã tải về',
@@ -888,19 +1097,21 @@ function openSetupDialog({ userDataDir }) {
       dialogModule.showMessageBox(win, {
         type: 'warning', buttons: ['Xóa', 'Hủy'], defaultId: 1, cancelId: 1,
         title: 'Zalo — Tính năng gọi điện',
-        message: 'Xóa wine đã tải về?',
-        detail: 'Sẽ xóa thư mục ' + runtime + '\nBạn có thể tải lại bất cứ lúc nào.'
+        message: 'Xóa Wine + GStreamer đã tải về?',
+        detail: 'Sẽ xóa ' + runtime + '\nvà ' + gstRuntime + '\nBạn có thể tải lại bất cứ lúc nào.'
       }).then(({ response }) => {
         if (response === 0) {
           try { fs.rmSync(runtime, { recursive: true, force: true }); } catch (e) {}
+          try { fs.rmSync(gstRuntime, { recursive: true, force: true }); } catch (e) {}
+          try { fs.rmSync(path.join(userDataDir, GST_TARBALL_NAME), { force: true }); } catch (e) {}
           const cfg = readConfig(userDataDir);
           delete cfg.winePath;
           writeConfig(userDataDir, cfg);
           pushStatus();
           dialogModule.showMessageBox(win, {
             type: 'info', title: 'Zalo — Tính năng gọi điện',
-            message: 'Đã xóa wine đã tải về',
-            detail: 'Thư mục đã bị xóa. Lần mở app sau sẽ hỏi lại hoặc tự dò wine hệ thống.'
+            message: 'Đã xóa Wine + GStreamer đã tải về',
+            detail: 'Các thư mục đã bị xóa. Lần mở app sau sẽ hỏi lại hoặc tự dò wine hệ thống.'
           });
         }
       });
@@ -1043,6 +1254,83 @@ function screenBridgeActive() {
   return bridgeProcs.some((p) => p && p.exitCode === null && !p.killed);
 }
 
+// Per-binary location inside the gst-runtime tree.
+const BRIDGE_BIN_RELS = {
+  xvfb: 'usr/bin/Xvfb',
+  python3: 'usr/bin/python3',
+  xdotool: 'usr/bin/xdotool',
+  'gst-launch-1.0': 'usr/bin/gst-launch-1.0',
+  'gst-inspect-1.0': 'usr/bin/gst-inspect-1.0',
+};
+
+/**
+ * Resolve the bridge executables + their environment, bundle first.
+ *
+ * source 'bundle': gst-runtime is present AND carries the whole bridge stack
+ *   (all-or-nothing — a partial tree, e.g. an older Full build that predates
+ *   this feature, falls through to 'system' exactly like non-Full). env holds
+ *   the per-spawn environment; callers must pass it to their own
+ *   spawn/execSync — this function NEVER mutates process.env.
+ * source 'system': today's behavior — bare command names resolved from PATH
+ *   with the inherited environment (env === null).
+ */
+function bridgeTools() {
+  const rt = findBundledGstRuntime();
+  if (rt) {
+    const tools = {};
+    let complete = true;
+    for (const [name, rel] of Object.entries(BRIDGE_BIN_RELS)) {
+      const p = path.join(rt, rel);
+      if (!fs.existsSync(p)) { complete = false; break; }
+      tools[name] = p;
+    }
+    // The interpreter alone is useless without its stdlib tree.
+    if (!fs.existsSync(path.join(rt, 'usr', 'lib', 'python3.10'))) complete = false;
+    if (complete) {
+      const libDir = path.join(rt, 'usr', 'lib', 'x86_64-linux-gnu');
+      const env = Object.assign({}, process.env, {
+        // Prepend, never replace: screenbridge.py launches `gst-launch-1.0`
+        // by bare name; the bundle must win that lookup.
+        PATH: path.join(rt, 'usr', 'bin') + ':' + (process.env.PATH || ''),
+        LD_LIBRARY_PATH: libDir + (process.env.LD_LIBRARY_PATH ? ':' + process.env.LD_LIBRARY_PATH : ''),
+        // Mirror the wine-spawn recipe (patch-zcall-callv2.js) so gst-launch
+        // and winegstreamer see the same plugin universe.
+        GST_PLUGIN_PATH: path.join(libDir, 'gstreamer-1.0'),
+        GST_PLUGIN_SYSTEM_PATH: path.join(rt, 'system'),
+        // Pin the scanner to the bundle's own (compiled-in /usr/lib lookups
+        // would otherwise hit a host gstreamer of a different version).
+        GST_PLUGIN_SCANNER: path.join(libDir, 'gstreamer1.0', 'gstreamer-1.0', 'gst-plugin-scanner'),
+        // Relocated python3.10: PYTHONHOME points at the tree root; the
+        // explicit PYTHONPATH adds the stdlib/dynload/dist-packages dirs the
+        // relocated getpath cannot derive. PYTHONNOUSERSITE keeps a host
+        // ~/.local site-packages out of the picture.
+        PYTHONHOME: path.join(rt, 'usr'),
+        PYTHONPATH: [
+          path.join(rt, 'usr', 'lib', 'python3.10'),
+          path.join(rt, 'usr', 'lib', 'python3.10', 'lib-dynload'),
+          path.join(rt, 'usr', 'lib', 'python3', 'dist-packages'),
+        ].join(':'),
+        PYTHONNOUSERSITE: '1',
+        // pygobject locates .typelib files only via GI_TYPELIB_PATH or the
+        // compiled-in /usr/lib path — mandatory on machines that never had
+        // python3-gi installed.
+        GI_TYPELIB_PATH: path.join(libDir, 'girepository-1.0'),
+        // libpipewire finds spa plugins relative to its own .so (dladdr)
+        // once loaded via LD_LIBRARY_PATH; the override is belt-and-braces.
+        SPA_PLUGIN_DIR: path.join(libDir, 'spa-0.2'),
+      });
+      // Own registry file, separate from the wine call's: identical content
+      // (same bundle), but no concurrent-scan write contention when a share
+      // starts mid-call. Unset -> gst falls back to its default writable
+      // cache; on Full it is always set by launch() first.
+      if (process.env.ZCALL_GST_REGISTRY_BRIDGE) env.GST_REGISTRY = process.env.ZCALL_GST_REGISTRY_BRIDGE;
+      return { source: 'bundle', tools, env };
+    }
+    debugLog('screenbridge: gst-runtime present but bridge stack incomplete — using system tools');
+  }
+  return { source: 'system', tools: null, env: null };
+}
+
 function startScreenBridge() {
   getElectronModules();
   if (screenBridgeActive()) {
@@ -1102,16 +1390,26 @@ function startScreenBridge() {
 
   // Missing system deps fail silently otherwise (gst then reports
   // "Could not open display" and the shim cannot reach :99).
+  const tools = bridgeTools();
   const missingDeps = [];
-  for (const dep of ['Xvfb', 'python3', 'xdotool', 'gst-launch-1.0']) {
-    try {
-      const r = execSync('which ' + dep, { encoding: 'utf8' });
-      if (!r.trim()) missingDeps.push(dep);
-    } catch (e) { missingDeps.push(dep); }
+  if (tools.source === 'system') {
+    // Bundle mode probes nothing — the all-or-nothing resolver already
+    // guaranteed every binary exists.
+    for (const dep of ['Xvfb', 'python3', 'xdotool', 'gst-launch-1.0']) {
+      try {
+        const r = execSync('which ' + dep, { encoding: 'utf8' });
+        if (!r.trim()) missingDeps.push(dep);
+      } catch (e) { missingDeps.push(dep); }
+    }
   }
+  // Element-level proof runs in BOTH modes (bundle: bundled gst-inspect with
+  // the bundle env; a plugin that fails to register must be reported, not
+  // assumed away).
   for (const plugin of ['pipewiresrc', 'ximagesink']) {
     try {
-      execSync('gst-inspect-1.0 ' + plugin, { stdio: 'ignore' });
+      const inspectBin = tools.source === 'bundle' ? tools.tools['gst-inspect-1.0'] : 'gst-inspect-1.0';
+      execSync(inspectBin + ' ' + plugin, Object.assign({ stdio: 'ignore' },
+        tools.source === 'bundle' ? { env: tools.env } : {}));
     } catch (e) { missingDeps.push('gst plugin ' + plugin); }
   }
   if (missingDeps.length) {
@@ -1135,10 +1433,23 @@ function startScreenBridge() {
     // Headless Xvfb holds the bridged stream; ZaloCall keeps running on the
     // real display (native UI) and the streamproxy shim redirects its
     // screen-capture reads to this display.
-    const xvfb = spawn('Xvfb', [BRIDGE_DISPLAY, '-screen', '0', w + 'x' + h + 'x24'], { stdio: ['ignore', 'ignore', 'pipe'] });
+    const xvfbBin = tools.source === 'bundle' ? tools.tools.xvfb : 'Xvfb';
+    // Bundle mode disables GLX: the stripped bundle has no libGL and the
+    // extension is never needed (ximagesink renders via XPutImage).
+    const xvfbArgs = [BRIDGE_DISPLAY, '-screen', '0', w + 'x' + h + 'x24'];
+    if (tools.source === 'bundle') xvfbArgs.push('-extension', 'GLX');
+    const xvfb = spawn(xvfbBin, xvfbArgs, Object.assign({ stdio: ['ignore', 'ignore', 'pipe'] },
+      tools.source === 'bundle' ? { env: tools.env } : {}));
     xvfb.stderr.on('data', (d) => debugLog('screenbridge xvfb: ' + String(d).trim().slice(0, 200)));
     bridgeProcs.push(xvfb);
-    const py = spawn('python3', [pyPath, BRIDGE_DISPLAY], { stdio: ['ignore', 'ignore', 'pipe'] });
+    // screenbridge.py inherits os.environ from this spawn, so its nested
+    // bare `gst-launch-1.0` resolves through the prepended PATH to the
+    // bundled binary and picks up the bundle GST_*/GI_* vars. The host
+    // XDG_RUNTIME_DIR / DBUS_SESSION_BUS_ADDRESS pass through untouched —
+    // they ARE the session pipewire socket + portal bus the flow needs.
+    const py = spawn(tools.source === 'bundle' ? tools.tools.python3 : 'python3',
+      [pyPath, BRIDGE_DISPLAY], Object.assign({ stdio: ['ignore', 'ignore', 'pipe'] },
+        tools.source === 'bundle' ? { env: tools.env } : {}));
     py.stderr.on('data', (d) => {
       const s = String(d).trim().slice(0, 300);
       debugLog('screenbridge: ' + s);
@@ -1161,7 +1472,9 @@ function startScreenBridge() {
     // "gst-launch-1.0", so match anything).
     setTimeout(() => {
       try {
-        execSync(`xdotool search --display ${BRIDGE_DISPLAY} "" 2>/dev/null | while read wid; do xdotool windowsize $wid ${w} ${h} windowmove $wid 0 0; done`, { stdio: 'ignore' });
+        const xdo = tools.source === 'bundle' ? tools.tools.xdotool : 'xdotool';
+        execSync(`${xdo} search --display ${BRIDGE_DISPLAY} "" 2>/dev/null | while read wid; do ${xdo} windowsize $wid ${w} ${h} windowmove $wid 0 0; done`,
+          Object.assign({ stdio: 'ignore' }, tools.source === 'bundle' ? { env: tools.env } : {}));
       } catch (e) { debugLog('screenbridge xdotool: ' + e.message); }
     }, 5000);
   } catch (e) {
@@ -1186,4 +1499,5 @@ module.exports = {
   shutdown,
   // internal (testability)
   _installDownloadedWine: installDownloadedWine,
+  _installDownloadedGst: installDownloadedGst,
 };

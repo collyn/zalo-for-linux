@@ -126,7 +126,10 @@ async function extractAppAsar() {
     const result = execSync(findResourcesCommand, { cwd: TEMP_DIR, encoding: 'utf8', stdio: 'pipe' });
     resourcesPaths = result.trim().split('\n').filter(Boolean);
   } catch (error) {
-    resourcesPaths = [];
+    // find can exit non-zero on "Permission denied" for unrelated dirs
+    // (e.g. root-owned leftovers in temp/) while STILL printing matches —
+    // keep whatever it found on stdout.
+    resourcesPaths = String(error.stdout || '').trim().split('\n').filter(Boolean);
   }
   const resourcesPath = resourcesPaths[0];
 

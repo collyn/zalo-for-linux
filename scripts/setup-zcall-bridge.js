@@ -150,9 +150,15 @@ async function main() {
 
   // -------------------------------------------------------------------------
   // 3. streamproxy.so (LD_PRELOAD shim that redirects ZaloCall's
-  //    screen-capture reads to the bridge display). MUST be 32-bit: ZaloCall
-  //    is a 32-bit app, so its winex11 driver binds the 32-bit libX11 —
-  //    a 64-bit shim would never intercept anything.
+  //    screen-capture reads to the bridge display). Two builds of the same
+  //    source, chosen at runtime by the wine flavor (see selectProxySo in
+  //    plugins/zcall-bridge/index.js):
+  //    - 32-bit: classic wine builds keep 32-bit unixlibs (lib/wine/i386-unix),
+  //      so ZaloCall runs in a 32-bit process whose winex11 driver binds the
+  //      32-bit libX11 — only a 32-bit preload can intercept.
+  //    - 64-bit: pure-wow64 wine builds (Full variant's bundled runtime) host
+  //      the 32-bit Windows code in ONE 64-bit process with 64-bit unixlibs —
+  //      only a 64-bit preload can intercept there.
   // -------------------------------------------------------------------------
   const proxySrc = path.join(ROOT, 'zcall-bridge', 'streamproxy.c');
   const proxySo = path.join(ROOT, 'zcall-bridge', 'streamproxy.so');
@@ -168,6 +174,20 @@ async function main() {
         'install with: sudo apt install gcc-multilib libc6-dev-i386 libx11-dev:i386 libxcb1-dev:i386 libxext-dev:i386' +
         ' (gcc said: ' + String(e.stderr || e.message).trim().slice(-300) + ')'
       );
+    }
+
+    // 3b. 64-bit variant — used when the selected wine is a pure-wow64 build
+    //     (Full variant's bundled wine). Non-fatal: the 32-bit shim above is
+    //     the hard requirement; this one only serves the wow64 runtime.
+    const proxySo64 = path.join(ROOT, 'zcall-bridge', 'streamproxy-x86_64.so');
+    try {
+      execSync(`gcc -shared -fPIC -O2 "${proxySrc}" -ldl -lX11 -lxcb -o "${proxySo64}"`, {
+        cwd: ROOT, stdio: 'pipe'
+      });
+      logger.dim('streamproxy-x86_64.so (64-bit) compiled from source');
+    } catch (e) {
+      logger.warn('64-bit shim build failed — Full variants lose Wayland screen-share proxying: ' +
+        String(e.stderr || e.message).trim().slice(-200));
     }
   } else {
     logger.warn('streamproxy.c missing — share screen will not work on Wayland');

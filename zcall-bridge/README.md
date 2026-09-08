@@ -66,28 +66,51 @@ Người dùng **không cần cài gì thủ công**. Ngay lần mở app đầu
      (không bị che), kèm lý do cụ thể — nút **"Tải và bật ngay"** /
      **"Để sau"**, link nguồn tải minh bạch và checkbox
      **"Không hỏi lại lần sau nếu không tải"**
-2. Chọn tải → cửa sổ tiến trình *"Đang tải Wine (~54MB)…"* với % trực quan
-   → tự giải nén → tự khởi tạo prefix (mất ~1-2 phút tổng cộng)
+2. Chọn tải → cửa sổ tiến trình *"Đang tải Wine (~94MB)…"* rồi *"Đang tải
+   GStreamer (~120MB)…"* với % trực quan → tự giải nén → tự khởi tạo prefix
+   (mất ~2-4 phút tổng cộng)
 3. Xong → thông báo *"Tính năng gọi điện đã sẵn sàng!"* — gọi được ngay,
    không cần khởi động lại, không cần quyền quản trị
 4. Chọn "Để sau" → **hỏi lại vào lần mở app sau**; tick "không hỏi lại" →
    không bao giờ tự hỏi nữa. Cả hai trường hợp đều bật lại được qua
    **menu khay hệ thống → "Cài đặt gọi điện…"**
 
-Wine tải về được lưu tại `<userData>/zcall-wine-runtime/` — hoàn toàn trong
-dữ liệu của app, không đụng hệ thống, gỡ app là sạch.
+Wine tải về lưu tại `<userData>/zcall-wine-runtime/`, cây GStreamer 64-bit
+(tải từ asset release `gst-runtime-<ver>.tar.xz`) lưu tại
+`<userData>/zcall-gst-runtime/` — hoàn toàn trong dữ liệu của app, không
+đụng hệ thống, gỡ app là sạch.
 
 ### Biến thể Full (wine đi kèm sẵn)
 
-Release có 2 biến thể **Full** (~430MB) cho cả 2 flavor: portable wine
-được đóng gói sẵn **bên trong AppImage** (`app/native/wine-runtime/`):
+Release có 2 biến thể **Full** cho cả 2 flavor: portable wine được đóng
+gói sẵn **bên trong AppImage**:
 
 - `Zalo-<ver>-<hash>-Full.AppImage` — không ZaDark
 - `Zalo-<ver>+ZaDark-<zdv>-<hash>-Full.AppImage` — có ZaDark
 
-Mở app lần đầu là gọi được ngay — không cần mạng, không cần tải wine.
-Bản thường (~263MB) vẫn giữ luồng tự tải ở trên; tất cả chạy từ cùng
-một code, chỉ khác phần wine đi kèm.
+Biến thể Full bundle:
+
+- **Wine bản wow64 thuần 64-bit** (`app/native/wine-runtime/`) — chạy app
+  Windows 32-bit (ZaloCall) **không cần bất kỳ thư viện 32-bit nào** của
+  hệ thống.
+- **GStreamer 64-bit + Wayland share-screen bridge** (`app/native/gst-runtime/`)
+  — v4l2src cho webcam, libav cho H.264, pipewiresrc cho share screen; kèm
+  Xvfb, xdotool, python3.10 + dbus/gir, gst-launch. Wine (wow64) dùng
+  GStreamer 64-bit nên **mic + camera + share screen hoạt động không cần
+  cài gì** (glibc ≥ 2.35 — Ubuntu 22.04/Mint 21+). Xvfb dùng libGL của
+  host (có sẵn trong mọi phiên đồ họa — không phải cài thêm).
+
+Mở app lần đầu là gọi và chia sẻ màn hình được ngay — không cần mạng,
+không cần tải wine, không cần cài thư viện. Trên Wayland, share screen đi
+qua portal của desktop (xdg-desktop-portal + phiên PipeWire — có sẵn trong
+mọi desktop Wayland); trên X11 hoạt động trực tiếp.
+
+Bản thường cũng **không cần cài gì**: lần chạy đầu tự tải cùng bộ wine
+wow64 + cây GStreamer/bridge (asset release `gst-runtime-<ver>.tar.xz`) về
+`<userData>/` — zero system-deps như bản Full, chỉ khác là phải tải về lần
+đầu (cần mạng) và tốn ~2GB ổ đĩa. Nếu tải GStreamer thất bại (bản dev, mạng
+chặn), app vẫn gọi thoại được và dùng GStreamer 64-bit hệ thống cho camera.
+Dùng wine hệ thống (classic) vẫn được hỗ trợ như một lựa chọn manual.
 
 ## Cấu hình Wine (custom path)
 
@@ -122,12 +145,20 @@ gọi** — và hộp thoại hỏi tải wine ở trên sẽ xuất hiện.
 | `ZCALL_WINEPREFIX` | Prefix wine dành riêng cho app | `<userData>/zcall-wine` |
 | `ZCALL_DISABLE` | Set bất kỳ giá trị nào để tắt hẳn tính năng gọi | — |
 | `ZCALL_AUTO_SETUP` | `'1'` = tải wine tự động, không hỏi (dùng khi triển khai hàng loạt/script) | — |
-| `ZCALL_WINE_DOWNLOAD_URL` | Ghi đè URL tải wine portable | URL kron4ek 11.14 trên GitHub |
+| `ZCALL_WINE_DOWNLOAD_URL` | Ghi đè URL tải wine portable | URL kron4ek 11.14 wow64 trên GitHub |
+| `ZCALL_GST_DOWNLOAD_URL` | Ghi đè URL tải asset GStreamer | `https://github.com/<repo build app>/releases/download/<ver>/gst-runtime-<ver>.tar.xz` (repo đọc tự động từ `build-info.json` — fork nào build thì trỏ về release của fork đó) |
+| `ZCALL_GST_RUNTIME` | Ghi đè đường dẫn cây GStreamer 64-bit (test/dev) | `app/native/gst-runtime` (Full) / `<userData>/zcall-gst-runtime` (bản thường) |
+| `ZCALL_GST_REGISTRY` | File registry gst riêng của app | `<userData>/gst-registry-64.bin` |
+| `ZCALL_GST_REGISTRY_BRIDGE` | Registry riêng cho gst-launch/gst-inspect của bridge | `<userData>/gst-registry-bridge-64.bin` |
 
 ## Cài thư viện cho từng distro (copy-paste)
 
-Bản wine tải tự động (kron4ek classic) dùng loader 32-bit nên **máy cần thư
-viện 32-bit**. Có 2 mức:
+> **Chỉ cần khi dùng wine hệ thống classic thủ công** (qua `ZCALL_WINE`/nút
+> "Chọn file wine có sẵn"). Wine tải tự động (wow64) + GStreamer tải về
+> (bản thường) hoặc đi kèm (Full) đều **không cần mục này**.
+
+Wine hệ thống classic dùng loader 32-bit nên **máy cần thư viện 32-bit**.
+Có 2 mức:
 
 - **Tối thiểu (gọi thoại — loa + mic)**: base libs + driver âm thanh
 - **Đầy đủ (thoại + video)**: thêm GStreamer + libv4l
@@ -217,8 +248,11 @@ v4l2-ctl --set-fmt-video=width=640,height=480,pixelformat=MJPG
 Trên Wayland, XWayland không nhìn thấy desktop nên ZaloCall (wine) chụp được
 màn hình đen. App có sẵn **bridge riêng**:
 
-1. Cài thành phần (một lần — nếu thiếu, app tự hiện dialog với đúng lệnh cho
-   distro của bạn khi bấm Share screen):
+1. Cài thành phần — **chỉ cần khi dùng wine hệ thống thủ công** (hoặc bản
+   release cũ chưa có bridge đi kèm); biến thể Full bundle sẵn và bản thường
+   tải về cùng cây GStreamer — cả hai chạy thẳng, bỏ qua bước này. Nếu
+   thiếu, app tự hiện dialog với đúng lệnh cho distro của bạn khi bấm Share
+   screen:
    ```bash
    # Fedora:  sudo dnf install xorg-x11-server-Xvfb xdotool python3-dbus \
    #            gstreamer1-plugins-base gstreamer1-plugins-bad-free
@@ -250,7 +284,11 @@ Trên **phiên X11**, share screen hoạt động trực tiếp — không cần
 
 ### Lưu ý giới hạn
 
-- Bản kron4ek **wow64** (thuần 64-bit) không chạy được ZaloCall — không dùng.
+- Bản kron4ek **wow64** (thuần 64-bit) không chạy được ZaloCall **trên wine
+  < 9** (wow64 thử nghiệm thời 8.6, lỗi với Qt 32-bit). Từ wine 9+ chạy tốt
+  (đã xác minh trên 11.14) — đây là build mặc định cho cả Full bundle lẫn
+  luồng tự tải của bản thường. Wine hệ thống classic vẫn hỗ trợ (cần thư
+  viện 32-bit, xem mục trên).
 - Công cụ xwaylandvideobridge của KDE chỉ chạy trên KDE Plasma (KWin); trên
   GNOME dùng bridge tích hợp của app (mục trên).
 
@@ -323,9 +361,22 @@ rm -rf /tmp/test-prefix
   libv4l) — camera đôi khi cần ép format: `v4l2-ctl --set-fmt-video=width=640,height=480,pixelformat=MJPG`
 - ✅ **Share screen trên Wayland** qua bridge tích hợp (XDG ScreenCast
   portal → PipeWire → GStreamer → Xvfb headless `:99` → streamproxy shim
-  32-bit → ZaloCall) — **người dùng xác nhận share hoạt động** trên KDE
+  → ZaloCall) — **người dùng xác nhận share hoạt động** trên KDE
   Wayland; ZaloCall chạy native, giao diện cuộc gọi không đổi; hộp thoại
-  quyền tự hiện khi bấm Share screen (shim báo hiệu qua file request)
+  quyền tự hiện khi bấm Share screen (shim báo hiệu qua file request).
+  Shim được build 2 kiến trúc: 32-bit (`streamproxy.so`) cho wine classic,
+  64-bit (`streamproxy-x86_64.so`) cho wine wow64 thuần — app tự chọn theo
+  build wine (probe `lib/wine/i386-unix`)
+- ✅ **Wine wow64 thuần 64-bit (11.14) xác minh**: `wineboot` + pipebridge
+  (PE32) + ZaloCall khởi tạo đủ call engine không crash (thứ từng fail trên
+  wine 8.6); LD_PRELOAD 64-bit load vào process wow64 (probe constructor +
+  `streamproxy-x86_64.so` nằm trong `/proc/<pid>/maps`) — nền tảng cho biến
+  thể Full không cần thư viện 32-bit
+- ✅ **Bridge stack self-contained xác minh tại build** (4 gate tự động):
+  ldd self-contained (15+ file, Xvfb allowlist libGL host), bundled python
+  import `dbus`+`gi` OK, bundled gst-inspect đăng ký `pipewiresrc`/
+  `ximagesink`/`videoconvert`, Xvfb chạy không GLX. Portal flow đầy đủ cần
+  test trên máy Wayland thật (Fedora/KDE) — người dùng xác nhận
 - ⚠️ Trên phiên X11 không cần bridge — share screen hoạt động trực tiếp.
 - ✅ `native-ready` → `init` → `makeCall` → `callState: incall`, `show success`,
   `sendSignal 401` — engine thực hiện cuộc gọi thật (voice + video signaling)
