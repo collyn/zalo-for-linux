@@ -314,6 +314,20 @@ async function bundleGstRuntime() {
     });
     fs.rmSync(path.join(stageRoot, 'lib'), { recursive: true, force: true });
   }
+  // jammy's libblas3/liblapack3 ship their .so in blas/ + lapack/ SUBDIRS,
+  // which a real system reaches via /etc/ld.so.conf.d/blas-*.conf. Our
+  // runtime LD_LIBRARY_PATH points only at the flat lib dir, so the loader
+  // would silently fall through to the HOST's blas (if installed) or fail.
+  // Flatten the subdirs into the lib dir.
+  for (const sub of ['blas', 'lapack']) {
+    const src = path.join(stageRoot, 'usr', 'lib', 'x86_64-linux-gnu', sub);
+    if (fs.existsSync(src)) {
+      fs.cpSync(src, path.join(stageRoot, 'usr', 'lib', 'x86_64-linux-gnu'), {
+        recursive: true, force: true, verbatimSymlinks: true
+      });
+      fs.rmSync(src, { recursive: true, force: true });
+    }
+  }
 
   // Strip the GL/mesa chain. apt forces it in via libgstreamer-gl (hard dep
   // of plugins-base) but it must NOT ship: our LD_LIBRARY_PATH is prepended
@@ -405,17 +419,33 @@ async function bundleGstRuntime() {
       }
     }
     const lddFiles = LDD_GATE.map((f) => path.join(libDir, f)).concat(pyMods);
+    // Resolutions allowed to come from the HOST: glibc core (never bundled —
+    // the container already ships libc) and Xvfb's GL trio. EVERYTHING else
+    // must resolve INSIDE libDir — a host-ld.so.cache fallback (e.g. host
+    // libblas under /usr/lib/x86_64-linux-gnu/blas) would make the bundle
+    // pass locally yet fail on machines without that package. This gate must
+    // catch exactly that.
+    const HOST_CORE = new Set([
+      'linux-vdso.so.1', 'ld-linux-x86-64.so.2', 'libc.so.6', 'libm.so.6',
+      'libpthread.so.0', 'libdl.so.2', 'librt.so.1', 'libgcc_s.so.1',
+      'libstdc++.so.6', 'libresolv.so.2', 'libnss_dns.so.2', 'libnss_files.so.2',
+      'libnss_compat.so.2', 'libutil.so.1', 'libatomic.so.1',
+    ]);
     const missing = [];
     for (const f of lddFiles) {
-      const out = execSync(`LD_LIBRARY_PATH="${libDir}" ldd "${f}"`, {
+      const out = execSync(`LD_LIBRARY_PATH="${libDir}" ldd "${path.join(libDir, f)}"`, {
         encoding: 'utf8', stdio: 'pipe'
       });
       for (const line of out.split('\n')) {
-        // Host-resolved-by-design for Xvfb only.
-        if (line.includes('not found') &&
-            !(f.includes('Xvfb') && /libGL|libGLdispatch|libGLX/.test(line))) {
-          missing.push(path.basename(f) + ' -> ' + line.trim());
-        }
+        if (!line.trim()) continue;
+        const m = line.match(/^\s*(\S+)\s*=>\s*(\S+)/);
+        if (!m) continue; // vdso / direct-loader lines without a path
+        const soname = m[1];
+        const resolved = m[2];
+        const isXvfbGl = f.includes('Xvfb') && /libGL|libGLdispatch|libGLX/.test(soname);
+        if (resolved.startsWith(libDir)) continue;
+        if (HOST_CORE.has(soname) || isXvfbGl) continue;
+        missing.push(path.basename(f) + ' -> ' + line.trim() + ' [resolves OUTSIDE bundle]');
       }
     }
     if (missing.length) {
