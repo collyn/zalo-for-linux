@@ -238,10 +238,18 @@ async function bundleGstRuntime() {
     // ---- closure. Blindly extracting every cached deb lets stale debs
     // ---- from earlier package sets leak into the tree (bloat + a local
     // ---- tree that differs from a fresh-CI tree — the libblas/liblapack
-    // ---- incident). --reinstall in the dry-run forces already-installed
-    // ---- packages into the Inst list.
-    'APT -s --reinstall install --no-install-recommends ' + ALL_PACKAGES.join(' ') + ' > /out/plan.txt',
-    "grep '^Inst ' /out/plan.txt | awk '{print $2}' | sort -u > /out/keep.txt",
+    // ---- incident). apt-cache depends --recurse lists the FULL recursive
+    // ---- closure BY NAME, INCLUDING packages already installed in the
+    // ---- base image (zlib1g, liblzma5, libbz2... — the `-s install` plan
+    // ---- silently omits them and their debs were never downloaded).
+    'apt-cache depends --recurse --no-recommends --no-suggests ' +
+      '--no-conflicts --no-breaks --no-replaces --no-enhances ' +
+      ALL_PACKAGES.join(' ') + ' > /out/closure.txt',
+    // Keep ONLY the first alternative of each Depends group — that is what
+    // apt actually selects; expanding all alternatives drags in openblas/
+    // blis/etc (~200MB of never-used providers).
+    'sed -E \'s/( \\| [^ (]+( \\([^)]*\\))?)+//g\' /out/closure.txt | ' +
+    'awk \'/^[^ ]/{if($1 !~ /^</) print $1} /^ *Depends:/{for(i=2;i<=NF;i++){sub(/[(:<].*/,"",$i); if($i!="|" && $i!="") print $i}}\' | grep -v "^<" | sort -u > /out/keep.txt',
     // Union with the explicit request list: even if the plan output format
     // ever changed and dropped a name, an explicitly-requested package must
     // always be extracted.
@@ -253,7 +261,9 @@ async function bundleGstRuntime() {
     // providers, restored-cache quirks) — fetch any missing one explicitly.
     'for p in $(cat /out/keep.txt); do',
     '  if ! ls /out/cache/${p}_*.deb /out/cache-py/${p}_*.deb /out/cache-pw/${p}_*.deb >/dev/null 2>&1; then',
-    '    (cd /out/cache && APT download "$p");',
+    // Guard against virtual packages / names with no downloadable deb:
+    // only fetch when apt actually knows a real candidate for the name.
+    '    apt-cache show "$p" >/dev/null 2>&1 && (cd /out/cache && APT download "$p");',
     '  fi',
     'done',
     'for f in /out/cache/*.deb /out/cache-py/*.deb /out/cache-pw/*.deb; do',
@@ -304,7 +314,10 @@ async function bundleGstRuntime() {
   // is relocatable. Also merge lib/ into usr/lib/ — a few debs still ship
   // files under /lib (pre-usr-merge layout), which the runtime
   // LD_LIBRARY_PATH entry would never see.
-  for (const p of ['usr/share/doc', 'usr/share/man', 'etc', 'bin', 'sbin', 'var']) {
+  for (const p of ['usr/share/doc', 'usr/share/man', 'etc', 'bin', 'sbin', 'var',
+    // Dead weight the recursive closure drags in — nothing in the camera/
+    // share pipelines renders text, so fonts/locale/TeX/Perl never load.
+    'usr/share/texmf', 'usr/share/perl', 'usr/share/locale', 'usr/share/fonts']) {
     fs.rmSync(path.join(stageRoot, p), { recursive: true, force: true });
   }
   const legacyLib = path.join(stageRoot, 'lib', 'x86_64-linux-gnu');
@@ -342,7 +355,17 @@ async function bundleGstRuntime() {
     'libOpenGL.so.*', 'libgallium*.so.*', 'libOSMesa.so.*', 'libglx-*.so.*',
     'gstreamer-1.0/libgstgl.so', 'gstreamer-1.0/libgstopengl*.so',
   ];
-  for (const pattern of GL_STRIP) {
+  // glibc core must NEVER ship either: the recursive apt closure
+  // re-introduces libc6 (installed in the base image), and a bundled
+  // libc.so.6/ld-linux under LD_LIBRARY_PATH breaks the HOST shell itself
+  // (glibc version mismatch) — these always resolve from the host.
+  const GLIBC_STRIP = [
+    'libc.so.6*', 'ld-linux*.so.2*', 'libm.so.6*', 'libpthread.so.0*',
+    'librt.so.1*', 'libdl.so.2*', 'libutil.so.1*', 'libgcc_s.so.1*',
+    'libstdc++.so.6*', 'libresolv.so.2*', 'libnss_*.so.2*', 'libanl.so.1*',
+    'libcrypt.so.1*',
+  ];
+  for (const pattern of GL_STRIP.concat(GLIBC_STRIP)) {
     const dir = path.dirname(pattern);
     const base = path.basename(pattern);
     let files = [];
@@ -432,10 +455,32 @@ async function bundleGstRuntime() {
       'libnss_compat.so.2', 'libutil.so.1', 'libatomic.so.1',
     ]);
     const missing = [];
+    let lddToolMissing = false;
     for (const f of lddFiles) {
-      const out = execSync(`LD_LIBRARY_PATH="${libDir}" ldd "${path.join(libDir, f)}"`, {
-        encoding: 'utf8', stdio: 'pipe'
-      });
+      // pyMods entries are absolute already; path.join does NOT reset on
+      // absolute segments, so a naive join would DOUBLE the prefix.
+      const full = path.isAbsolute(f) ? f : path.join(libDir, f);
+      if (!fs.existsSync(full)) {
+        // Hard defect: a gate target is absent even though the existence
+        // gate passed moments ago — dump everything to pinpoint it.
+        let listing = '';
+        try { listing = fs.readdirSync(libDir).slice(0, 40).join('\n'); } catch (e) { listing = String(e.message); }
+        let lstatInfo = '';
+        try { lstatInfo = JSON.stringify(fs.lstatSync(full)); } catch (e) { lstatInfo = String(e.message); }
+        throw new Error('ldd gate target missing: ' + full + '\nlstat: ' + lstatInfo + '\nlibDir listing (first 40):\n' + listing);
+      }
+      let out;
+      try {
+        out = execSync(`LD_LIBRARY_PATH="${libDir}" ldd "${full}"`, {
+          encoding: 'utf8', stdio: 'pipe'
+        });
+      } catch (e) {
+        const msg = String(e.stderr || e.message || '');
+        // Only when the ldd TOOL itself is absent do we degrade to a warn —
+        // any other failure (missing file, loader errors) is a hard defect.
+        if (/ldd[^:]*:\s*not found/i.test(msg)) { lddToolMissing = true; break; }
+        throw new Error('ldd failed on ' + full + ': ' + msg.slice(-400));
+      }
       for (const line of out.split('\n')) {
         if (!line.trim()) continue;
         const m = line.match(/^\s*(\S+)\s*=>\s*(\S+)/);
@@ -447,6 +492,10 @@ async function bundleGstRuntime() {
         if (HOST_CORE.has(soname) || isXvfbGl) continue;
         missing.push(path.basename(f) + ' -> ' + line.trim() + ' [resolves OUTSIDE bundle]');
       }
+    }
+    if (lddToolMissing) {
+      logger.warn('ldd unavailable on this machine — self-containment check skipped');
+      missing.length = 0;
     }
     if (missing.length) {
       // Diagnostics: which expected libs exist in the extracted tree / cache?
@@ -478,7 +527,7 @@ async function bundleGstRuntime() {
     }
     logger.dim('gst bundle deps self-contained (' + (LDD_GATE.length + pyMods.length) + ' files checked)');
   } catch (e) {
-    if (String(e.message).includes('unresolved deps')) throw e;
+    if (/unresolved deps|ldd gate target missing|ldd failed on/.test(String(e.message || ''))) throw e;
     logger.warn('ldd dep check skipped (ldd unavailable): ' + String(e.message).slice(-120));
   }
 
