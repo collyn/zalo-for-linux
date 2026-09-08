@@ -131,7 +131,10 @@ const BRIDGE_X_PACKAGES = [
 const PY_PACKAGES = [
   'python3.10-minimal', 'libpython3.10-minimal', 'libpython3.10-stdlib',
   'python3.10', 'python3-minimal', 'python3',
-  'python3-dbus', 'python3-gi', 'gir1.2-glib-2.0', 'gir1.2-girepository-2.0',
+  'python3-dbus', 'python3-gi',
+  // NOTE: gir1.2-girepository-2.0 does NOT exist in jammy — the
+  // girepository typelib ships inside libgirepository-1.0-1 there.
+  'gir1.2-glib-2.0',
   'libgirepository-1.0-1', 'libffi8', 'libexpat1', 'libmpdec3', 'libdbus-1-3',
 ];
 
@@ -239,6 +242,20 @@ async function bundleGstRuntime() {
     // ---- packages into the Inst list.
     'APT -s --reinstall install --no-install-recommends ' + ALL_PACKAGES.join(' ') + ' > /out/plan.txt',
     "grep '^Inst ' /out/plan.txt | awk '{print $2}' | sort -u > /out/keep.txt",
+    // Union with the explicit request list: even if the plan output format
+    // ever changed and dropped a name, an explicitly-requested package must
+    // always be extracted.
+    'printf "%s\\n" ' + ALL_PACKAGES.join(' ') + ' >> /out/keep.txt',
+    'sort -u /out/keep.txt -o /out/keep.txt',
+    // Belt-and-braces: every package in the plan MUST have its deb in the
+    // cache before extraction. `install --download-only` can silently skip
+    // packages that apt deems satisfied (installed in the image, alternative
+    // providers, restored-cache quirks) — fetch any missing one explicitly.
+    'for p in $(cat /out/keep.txt); do',
+    '  if ! ls /out/cache/${p}_*.deb /out/cache-py/${p}_*.deb /out/cache-pw/${p}_*.deb >/dev/null 2>&1; then',
+    '    (cd /out/cache && APT download "$p");',
+    '  fi',
+    'done',
     'for f in /out/cache/*.deb /out/cache-py/*.deb /out/cache-pw/*.deb; do',
     '  n=$(dpkg-deb -f "$f" Package 2>/dev/null || true)',
     '  if grep -qxF "$n" /out/keep.txt; then dpkg-deb -x "$f" /out/root; fi',
@@ -402,7 +419,32 @@ async function bundleGstRuntime() {
       }
     }
     if (missing.length) {
-      throw new Error('gst bundle has unresolved deps:\n' + missing.join('\n'));
+      // Diagnostics: which expected libs exist in the extracted tree / cache?
+      const diag = [];
+      try {
+        const stageCache = path.join(stage, 'cache');
+        const want = ['libblas', 'liblapack'];
+        for (const w of want) {
+          const inTree = (function walk(dir) {
+            let hit = false;
+            try {
+              for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+                const p = path.join(dir, e.name);
+                if (e.isDirectory()) hit = walk(p) || hit;
+                else if (e.name.startsWith(w)) hit = true;
+              }
+            } catch (_) { /* none */ }
+            return hit;
+          })(libDir);
+          let inCache = '';
+          try { inCache = fs.readdirSync(stageCache).filter((x) => x.startsWith(w)).join(', '); } catch (_) { /* none */ }
+          diag.push(`${w}: in-tree=${inTree} in-cache=[${inCache}]`);
+        }
+        let keepLine = '';
+        try { keepLine = fs.readFileSync(path.join(stage, 'keep.txt'), 'utf8').split('\n').filter((l) => /blas|lapack/.test(l)).join(', '); } catch (_) { /* none */ }
+        diag.push('keep.txt blas/lapack: [' + keepLine + ']');
+      } catch (e) { diag.push('diag error: ' + e.message); }
+      throw new Error('gst bundle has unresolved deps:\n' + missing.join('\n') + '\n' + diag.join('\n'));
     }
     logger.dim('gst bundle deps self-contained (' + (LDD_GATE.length + pyMods.length) + ' files checked)');
   } catch (e) {
