@@ -96,10 +96,16 @@ const GST_PACKAGES = [
   'gstreamer1.0-plugins-good',
   // plugins-bad intentionally omitted: libav covers decode/encode (see
   // README) and bad pulls heavy deps (libblas3, libavfilter, ...). The ONE
-  // exception is pipewiresrc for the Wayland bridge — cherry-picked alone
-  // in fetch phase 3, never as part of the closure.
+  // exception is pipewiresrc for the Wayland bridge — fetched alone in
+  // phase 3, never as part of the closure.
   'gstreamer1.0-libav',
   'libv4l-0',
+  // libavcodec58 hard-depends libblas3/liblapack3 via ALTERNATIVE deps
+  // (libblas3 | libatlas3-base | libopenblas-base) — resolution differs by
+  // container state, so pin them explicitly or fresh caches miss them and
+  // the ldd gate fails on libgstlibav.so.
+  'libblas3',
+  'liblapack3',
   // glib dlopens libpcre for regex — a Recommends, so --no-install-recommends
   // drops it; the gst-plugin-scanner links it directly.
   'libpcre3',
@@ -201,38 +207,48 @@ async function bundleGstRuntime() {
     logger.info('Bundling 64-bit GStreamer + Wayland bridge stack (ubuntu:22.04 debs) for the Full variant...');
     fs.mkdirSync(stage, { recursive: true });
     // Script via a mounted file — nested shell quoting would eat `$f`.
+    const ALL_PACKAGES = GST_PACKAGES.concat(BRIDGE_X_PACKAGES, PY_PACKAGES, PW_PACKAGES, ['libpcre3']);
     const script = [
       'set -e',
       'export DEBIAN_FRONTEND=noninteractive',
       'apt-get update -qq',
       // Fresh extract, but KEEP /out/cache: CI restores the deb cache there
       // and apt re-uses it (matching checksums skip the re-download).
-      'rm -rf /out/root /out/cache-py /out/cache-pw /out/bad-tmp',
+      'rm -rf /out/root /out/cache-py /out/cache-pw',
       'mkdir -p /out/cache/partial /out/cache-py /out/cache-pw /out/root',
+      // Silences "Download is performed unsandboxed as root" noise.
+      'APT() { apt-get -o APT::Sandbox::User=root "$@"; }',
       // ---- Phase 1: gst runtime + X bridge stack (not installed in the
       // ---- image, so the full closure lands: xserver-common, xkb-data,
       // ---- libxfont2, libpixman, libxdo3, ...).
-      'apt-get -o Dir::Cache::archives=/out/cache install -y -qq ' +
+      'APT -o Dir::Cache::archives=/out/cache install -y -qq ' +
         '--download-only --no-install-recommends ' +
         GST_PACKAGES.concat(BRIDGE_X_PACKAGES).join(' '),
       // libpcre3 ships in the base image, so `install --download-only` skips
       // it — pull it explicitly (download ignores Dir::Cache::archives, so
       // run it from inside the cache dir).
-      'cd /out/cache && apt-get download libpcre3 && cd /out',
+      'cd /out/cache && APT download libpcre3 && cd /out',
       // ---- Phase 2: python closure. python3 IS installed in the base image,
       // ---- so plain download-only would skip it: --reinstall forces the
       // ---- re-download of the NAMED installed packages; uninstalled deps
       // ---- fetch normally.
-      'apt-get -o Dir::Cache::archives=/out/cache-py install -y -qq ' +
+      'APT -o Dir::Cache::archives=/out/cache-py install -y -qq ' +
         '--reinstall --download-only --no-install-recommends ' + PY_PACKAGES.join(' '),
       // ---- Phase 3: pipewiresrc, NO closure — the explicit list below
       // ---- (gstreamer1.0-pipewire contains exactly the plugin .so).
-      'cd /out/cache-pw && apt-get download ' + PW_PACKAGES.join(' ') + ' && cd /out',
-      // ---- Extract phases 1 + 2 in full.
-      'for f in /out/cache/*.deb; do dpkg-deb -x "$f" /out/root; done',
-      'for f in /out/cache-py/*.deb; do dpkg-deb -x "$f" /out/root; done',
-      // ---- Phase 3 extract: all four debs whole.
-      'for f in /out/cache-pw/*.deb; do dpkg-deb -x "$f" /out/root; done',
+      'cd /out/cache-pw && APT download ' + PW_PACKAGES.join(' ') + ' && cd /out',
+      // ---- Deterministic extraction: only debs belonging to the CURRENT
+      // ---- closure. Blindly extracting every cached deb lets stale debs
+      // ---- from earlier package sets leak into the tree (bloat + a local
+      // ---- tree that differs from a fresh-CI tree — the libblas/liblapack
+      // ---- incident). --reinstall in the dry-run forces already-installed
+      // ---- packages into the Inst list.
+      'APT -s --reinstall install --no-install-recommends ' + ALL_PACKAGES.join(' ') + ' > /out/plan.txt',
+      "grep '^Inst ' /out/plan.txt | awk '{print $2}' | sort -u > /out/keep.txt",
+      'for f in /out/cache/*.deb /out/cache-py/*.deb /out/cache-pw/*.deb; do',
+      '  n=$(dpkg-deb -f "$f" Package 2>/dev/null || true)',
+      '  if grep -qxF "$n" /out/keep.txt; then dpkg-deb -x "$f" /out/root; fi',
+      'done',
       // root-owned inside the container — give everything back to the
       // invoking user (NOT just root/: leftover root-owned dirs like
       // cache/partial break `find` runs elsewhere in the build with
