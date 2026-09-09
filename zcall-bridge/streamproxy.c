@@ -51,6 +51,74 @@ static int disabled(void) {
     return d;
 }
 
+/* Camera levers (Mint video-call crash bisect):
+ *  ZCALL_CAMERA_PASSTHROUGH=1 — camera fds pass through untouched: no MJPG
+ *    forcing at open, no wedge refusal, no close-time kick. Proves whether
+ *    the shim's own camera handling is implicated in the crash.
+ *  ZCALL_CAMERA_DEBUG=1 — trace every V4L2 negotiation ioctl on camera fds
+ *    (ENUM_FMT/S_FMT/TRY_FMT/G_FMT/REQBUFS/STREAMON|OFF) into the proxy
+ *    log: shows exactly what the app requests vs what the driver grants.
+ */
+static int camera_passthrough(void) {
+    static int v = -1;
+    if (v < 0) v = getenv("ZCALL_CAMERA_PASSTHROUGH") != NULL;
+    return v;
+}
+
+static int camera_debug(void) {
+    static int v = -1;
+    if (v < 0) v = getenv("ZCALL_CAMERA_DEBUG") != NULL;
+    return v;
+}
+
+/* ZCALL_CAMERA_FORCE_YUYV=1 — prefer raw YUYV over MJPG everywhere (open-time
+ * fmt AND the app's own S_FMT is rewritten). The Mint laptop crash: the
+ * 32-bit libv4l tinyjpeg decode of this webcam's MJPG stream corrupts frames,
+ * ZaloCall derefs the garbage. YUYV 640x480@30 is natively supported by these
+ * cameras, so nothing is lost at this size. */
+static int camera_force_yuyv(void) {
+    static int v = -1;
+    if (v < 0) v = getenv("ZCALL_CAMERA_FORCE_YUYV") != NULL;
+    return v;
+}
+
+static int is_video_path(const char *path) {
+    return path && (strstr(path, "/dev/video") || strstr(path, "/dev/v4l"));
+}
+
+/* Track camera fds (open -> close) so the ioctl tracer only logs V4L2 fds
+ * and the close wrapper does not ioctl-probe unrelated fds. */
+static struct { int fd; char path[64]; } cam_fds[32];
+static int cam_fd_count = 0;
+
+static void cam_fd_add(int fd, const char *path) {
+    if (fd >= 0 && cam_fd_count < 32) {
+        cam_fds[cam_fd_count].fd = fd;
+        strncpy(cam_fds[cam_fd_count].path, path ? path : "?", 63);
+        cam_fds[cam_fd_count].path[63] = 0;
+        cam_fd_count++;
+    }
+}
+
+static int cam_fd_find(int fd) {
+    for (int i = 0; i < cam_fd_count; i++)
+        if (cam_fds[i].fd == fd) return i;
+    return -1;
+}
+
+static void cam_fd_remove(int fd) {
+    int i = cam_fd_find(fd);
+    if (i >= 0) { cam_fds[i] = cam_fds[cam_fd_count - 1]; cam_fd_count--; }
+}
+
+static void fourcc_str(uint32_t f, char out[5]) {
+    out[0] = (char)(f & 0xff); out[1] = (char)((f >> 8) & 0xff);
+    out[2] = (char)((f >> 16) & 0xff); out[3] = (char)((f >> 24) & 0xff);
+    out[4] = 0;
+    for (int i = 0; i < 4; i++)
+        if (out[i] < 32 || out[i] > 126) out[i] = '?';
+}
+
 static void plog(const char *fmt, ...) {
     if (!logf) {
         const char *p = getenv("ZCALL_PROXY_LOG");
@@ -92,7 +160,8 @@ static void vlog(const char *fmt, ...) {
 typedef int (*open_fn)(const char *, int, ...);
 
 /* Try MJPG 640x480 first; fall back to YUYV 640x480 (IR/secondary devices
- * usually only do raw formats). Returns the pixelformat actually set. */
+ * usually only do raw formats). ZCALL_CAMERA_FORCE_YUYV=1 inverts the
+ * preference. Returns the pixelformat actually set. */
 static uint32_t set_camera_fmt(int fd) {
     struct v4l2_format fmt;
     memset(&fmt, 0, sizeof(fmt));
@@ -100,12 +169,14 @@ static uint32_t set_camera_fmt(int fd) {
     if (ioctl(fd, VIDIOC_G_FMT, &fmt) < 0) return 0;
     fmt.fmt.pix.width = 640;
     fmt.fmt.pix.height = 480;
-    fmt.fmt.pix.pixelformat = V4L2_PIX_FMT_MJPEG;
-    if (ioctl(fd, VIDIOC_S_FMT, &fmt) == 0 && fmt.fmt.pix.pixelformat == V4L2_PIX_FMT_MJPEG)
-        return V4L2_PIX_FMT_MJPEG;
-    fmt.fmt.pix.pixelformat = V4L2_PIX_FMT_YUYV;
-    if (ioctl(fd, VIDIOC_S_FMT, &fmt) == 0 && fmt.fmt.pix.pixelformat == V4L2_PIX_FMT_YUYV)
-        return V4L2_PIX_FMT_YUYV;
+    uint32_t first = camera_force_yuyv() ? V4L2_PIX_FMT_YUYV : V4L2_PIX_FMT_MJPEG;
+    uint32_t second = camera_force_yuyv() ? V4L2_PIX_FMT_MJPEG : V4L2_PIX_FMT_YUYV;
+    fmt.fmt.pix.pixelformat = first;
+    if (ioctl(fd, VIDIOC_S_FMT, &fmt) == 0 && fmt.fmt.pix.pixelformat == first)
+        return first;
+    fmt.fmt.pix.pixelformat = second;
+    if (ioctl(fd, VIDIOC_S_FMT, &fmt) == 0 && fmt.fmt.pix.pixelformat == second)
+        return second;
     return 0;
 }
 
@@ -125,37 +196,43 @@ static int wrap_open(const char *path, int flags, mode_t mode, const char *sym) 
         fn = real_open;
     }
     int fd = fn(path, flags, mode);
-    if (fd >= 0 && path && strstr(path, "/dev/video")) {
-        uint32_t got = set_camera_fmt(fd);
-        if (got == V4L2_PIX_FMT_MJPEG)
-            plog("streamproxy: camera %s -> MJPG 640x480\n", path);
-        else if (got == V4L2_PIX_FMT_YUYV)
-            plog("streamproxy: camera %s -> YUYV 640x480 (no MJPG)\n", path);
-        else {
-            /* Neither format accepted. Either a format-poor device (IR
-             * camera) or a WEDGED one left half-streaming by the previous
-             * session — try a mini-stream recovery on a fresh fd. */
-            static open_fn real_open_r = NULL;
-            if (!real_open_r) real_open_r = (open_fn)dlsym(RTLD_NEXT, "open");
-            int r = real_open_r(path, O_RDWR | O_NONBLOCK, 0);
-            if (r >= 0) {
-                recover_camera(r);
-                real_close_fn(r);
-                got = set_camera_fmt(fd);
-            }
-            if (got == V4L2_PIX_FMT_MJPEG || got == V4L2_PIX_FMT_YUYV) {
-                plog("streamproxy: camera %s recovered by mini-stream -> fmt OK\n", path);
-            } else if (getenv("ZCALL_CAMERA_KEEP_WEDGED")) {
-                /* Debug lever: let the app see the half-dead device (old
-                 * behavior — the app then crashes on the garbage it reads). */
-                plog("streamproxy: camera %s: WEDGED, left open (debug)\n", path);
-            } else {
-                /* Refuse the open: ZaloCall sees "no camera" and degrades
-                 * to voice-only instead of crashing on a half-dead device.
-                 * The user can then replug / rmmod at leisure. */
-                plog("streamproxy: camera %s: WEDGED — open refused (voice-only fallback)\n", path);
-                real_close_fn(fd);
-                return -1;
+    if (fd >= 0 && is_video_path(path)) {
+        if (camera_passthrough()) {
+            if (camera_debug())
+                plog("streamproxy: camera %s passthrough open (no fmt force)\n", path);
+        } else {
+            uint32_t got = set_camera_fmt(fd);
+            if (got == V4L2_PIX_FMT_MJPEG)
+                plog("streamproxy: camera %s -> MJPG 640x480\n", path);
+            else if (got == V4L2_PIX_FMT_YUYV)
+                plog("streamproxy: camera %s -> YUYV 640x480 (%s)\n", path,
+                     camera_force_yuyv() ? "forced" : "no MJPG");
+            else {
+                /* Neither format accepted. Either a format-poor device (IR
+                 * camera) or a WEDGED one left half-streaming by the previous
+                 * session — try a mini-stream recovery on a fresh fd. */
+                static open_fn real_open_r = NULL;
+                if (!real_open_r) real_open_r = (open_fn)dlsym(RTLD_NEXT, "open");
+                int r = real_open_r(path, O_RDWR | O_NONBLOCK, 0);
+                if (r >= 0) {
+                    recover_camera(r);
+                    real_close_fn(r);
+                    got = set_camera_fmt(fd);
+                }
+                if (got == V4L2_PIX_FMT_MJPEG || got == V4L2_PIX_FMT_YUYV) {
+                    plog("streamproxy: camera %s recovered by mini-stream -> fmt OK\n", path);
+                } else if (getenv("ZCALL_CAMERA_KEEP_WEDGED")) {
+                    /* Debug lever: let the app see the half-dead device (old
+                     * behavior — the app then crashes on the garbage it reads). */
+                    plog("streamproxy: camera %s: WEDGED, left open (debug)\n", path);
+                } else {
+                    /* Refuse the open: ZaloCall sees "no camera" and degrades
+                     * to voice-only instead of crashing on a half-dead device.
+                     * The user can then replug / rmmod at leisure. */
+                    plog("streamproxy: camera %s: WEDGED — open refused (voice-only fallback)\n", path);
+                    real_close_fn(fd);
+                    return -1;
+                }
             }
         }
     }
@@ -178,7 +255,7 @@ int open(const char *path, int flags, ...) {
         return real_open_o(path, flags, mode);
     }
     int fd = wrap_open(path, flags, mode, "open");
-    if (fd >= 0 && path && strstr(path, "/dev/video")) cam_open_count++;
+    if (fd >= 0 && is_video_path(path)) { cam_open_count++; cam_fd_add(fd, path); }
     return fd;
 }
 
@@ -196,7 +273,7 @@ int open64(const char *path, int flags, ...) {
         return real_open64_o(path, flags, mode);
     }
     int fd = wrap_open(path, flags, mode, "open64");
-    if (fd >= 0 && path && strstr(path, "/dev/video")) cam_open_count++;
+    if (fd >= 0 && is_video_path(path)) { cam_open_count++; cam_fd_add(fd, path); }
     return fd;
 }
 
@@ -209,12 +286,6 @@ int open64(const char *path, int flags, ...) {
  * Mint "first call works, second call crashes" bug). When the LAST fd on
  * a /dev/video* device closes, re-open it briefly, send STREAMOFF and
  * re-apply the format — a userspace "kick" that normalizes the driver. */
-
-static int fd_is_camera(int fd) {
-    struct v4l2_capability cap;
-    memset(&cap, 0, sizeof(cap));
-    return ioctl(fd, VIDIOC_QUERYCAP, &cap) == 0;
-}
 
 /* Full mini-stream cycle: format -> 2 mmap buffers -> STREAMON ->
  * STREAMOFF -> release. This is the sequence uvcvideo needs to return the
@@ -259,14 +330,85 @@ static void kick_camera(const char *path) {
 int close(int fd) {
     if (!real_close_fn) real_close_fn = (int (*)(int))dlsym(RTLD_NEXT, "close");
     if (disabled()) return real_close_fn(fd);
-    int is_cam = fd_is_camera(fd);
+    int is_cam = cam_fd_find(fd) >= 0;
     int ret = real_close_fn(fd);
-    if (is_cam && cam_open_count > 0) {
-        cam_open_count--;
-        if (cam_open_count == 0) {
-            /* Last camera fd in the process closed — normalize the device.
-             * Best-effort on video0 (the real webcam). */
-            kick_camera("/dev/video0");
+    if (is_cam) {
+        cam_fd_remove(fd);
+        if (cam_open_count > 0) {
+            cam_open_count--;
+            if (cam_open_count == 0 && !camera_passthrough()) {
+                /* Last camera fd in the process closed — normalize the device.
+                 * Best-effort on video0 (the real webcam). */
+                kick_camera("/dev/video0");
+            }
+        }
+    }
+    return ret;
+}
+
+/* ------------------------------------------------------------------ */
+/* V4L2 negotiation tracer (ZCALL_CAMERA_DEBUG=1)                      */
+/* ------------------------------------------------------------------ */
+/* Logs the app's format negotiation on camera fds: which formats it
+ * enumerates, what S_FMT it requests and what the driver grants, buffer
+ * requests and stream start/stop. This pins down WHY the stream is bad on
+ * a given machine without touching any state (read-only tracing). */
+static int (*real_ioctl_fn)(int, unsigned long, ...) = NULL;
+
+int ioctl(int fd, unsigned long request, ...) {
+    if (!real_ioctl_fn)
+        real_ioctl_fn = (int (*)(int, unsigned long, ...))dlsym(RTLD_NEXT, "ioctl");
+    va_list ap;
+    va_start(ap, request);
+    void *arg = va_arg(ap, void *);
+    va_end(ap);
+    int i = (camera_debug() || camera_force_yuyv()) ? cam_fd_find(fd) : -1;
+    const char *p = (i >= 0) ? cam_fds[i].path : NULL;
+    if (p && (request == VIDIOC_S_FMT || request == VIDIOC_TRY_FMT)) {
+        struct v4l2_format f;
+        if (arg) {
+            memcpy(&f, arg, sizeof(f));
+            /* Rewrite the app's MJPG commit to YUYV 640x480: keeps the
+             * 32-bit pipeline off the tinyjpeg decode path entirely. */
+            if (request == VIDIOC_S_FMT && camera_force_yuyv() &&
+                f.fmt.pix.pixelformat == V4L2_PIX_FMT_MJPEG) {
+                f.fmt.pix.pixelformat = V4L2_PIX_FMT_YUYV;
+                f.fmt.pix.width = 640;
+                f.fmt.pix.height = 480;
+                memcpy(arg, &f, sizeof(f));
+                plog("streamproxy: camera %s S_FMT MJPG -> forced YUYV 640x480\n", p);
+            }
+            char c[5];
+            fourcc_str(f.fmt.pix.pixelformat, c);
+            plog("streamproxy: camera %s %s req %ux%u %s\n", p,
+                 request == VIDIOC_S_FMT ? "S_FMT" : "TRY_FMT",
+                 f.fmt.pix.width, f.fmt.pix.height, c);
+        }
+    }
+    int ret = real_ioctl_fn(fd, request, arg);
+    if (p) {
+        if (request == VIDIOC_S_FMT || request == VIDIOC_TRY_FMT || request == VIDIOC_G_FMT) {
+            struct v4l2_format f; char c[5];
+            if (arg && ret == 0) { memcpy(&f, arg, sizeof(f));
+                fourcc_str(f.fmt.pix.pixelformat, c);
+                plog("streamproxy: camera %s fmt -> %ux%u %s (ok)\n", p,
+                     f.fmt.pix.width, f.fmt.pix.height, c); }
+            else
+                plog("streamproxy: camera %s fmt -> EINVAL\n", p);
+        } else if (request == VIDIOC_ENUM_FMT && ret == 0) {
+            struct v4l2_fmtdesc d; char c[5];
+            memcpy(&d, arg, sizeof(d));
+            fourcc_str(d.pixelformat, c);
+            plog("streamproxy: camera %s enum[%u] = %s\n", p, d.index, c);
+        } else if (request == VIDIOC_REQBUFS) {
+            struct v4l2_requestbuffers r;
+            memcpy(&r, arg, sizeof(r));
+            plog("streamproxy: camera %s REQBUFS count=%u mem=%u (%s)\n", p,
+                 r.count, r.memory, ret == 0 ? "ok" : "EINVAL");
+        } else if (request == VIDIOC_STREAMON || request == VIDIOC_STREAMOFF) {
+            plog("streamproxy: camera %s %s (%s)\n", p,
+                 request == VIDIOC_STREAMON ? "STREAMON" : "STREAMOFF",
+                 ret == 0 ? "ok" : "EINVAL");
         }
     }
     return ret;
