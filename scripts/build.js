@@ -33,6 +33,17 @@ async function main() {
     fs.rmSync(path.join(APP_DIR, 'native', 'gst-runtime'), { recursive: true, force: true });
     fs.rmSync(path.join(BASE_DIR, 'temp', 'runtime-stash'), { recursive: true, force: true });
 
+    // The capture shims are compiled build artifacts: packaging silently
+    // drops them when missing (electron-builder honors .gitignore for
+    // extraFiles — the exact bug that shipped share-screen-dead AppImages
+    // before). Fail loudly instead.
+    for (const shim of ['streamproxy.so', 'streamproxy-x86_64.so']) {
+      if (!fs.existsSync(path.join(BASE_DIR, 'zcall-bridge', shim))) {
+        throw new Error('missing zcall-bridge/' + shim +
+          ' — run the SETUP phase first (npm run main / node scripts/setup-zcall-bridge.js)');
+      }
+    }
+
     // ZALO_ONLY_FULL=1: skip the two standard variants (dev loop — saves
     // two electron-builder passes). CI always builds all four.
     const onlyFull = process.env.ZALO_ONLY_FULL === '1';
@@ -381,6 +392,31 @@ async function bundleGstRuntime() {
     'libOpenGL.so.*', 'libgallium*.so.*', 'libOSMesa.so.*', 'libglx-*.so.*',
     'gstreamer-1.0/libgstgl.so', 'gstreamer-1.0/libgstopengl*.so',
   ];
+  // Same class of bug one layer down: the host GL stack (mesa dri drivers,
+  // AMDGPU-PRO's /opt/amdgpu libgallium) links these, and a bundled jammy
+  // copy shadows the host's newer one under the prepended LD_LIBRARY_PATH.
+  // On AMD-PRO machines libgallium's dlopen dies with "undefined symbol:
+  // amdgpu_va_get_start_addr" (resolved against jammy libdrm_amdgpu 1.0.0)
+  // and ZaloCall.exe never starts; the same shadowing killed Xvfb on that
+  // machine (gate (d)). Every host GL stack ships these support libs, so
+  // they always resolve from the host — the ldd gate allowlist below.
+  const DRM_STRIP = [
+    'libdrm.so.*', 'libdrm_amdgpu.so.*', 'libdrm_intel.so.*',
+    'libdrm_nouveau.so.*', 'libdrm_radeon.so.*',
+    'libzstd.so.*', 'libxshmfence.so.*', 'libpciaccess.so.*',
+  ];
+  // The screen bridge must use the HOST pipewire stack. jammy's 0.3.48
+  // client cannot export stream nodes to modern daemons (1.x raised the
+  // protocol floor: pw_core_export dies with "Protocol error"), and its
+  // mandatory-module load resolves against the host moduledir regardless —
+  // a failed pw_context_new() then segfaults gstpipewire via
+  // pw_context_connect(NULL). The bridge only ever runs inside a Wayland
+  // session, where host pipewire is the session's own infrastructure —
+  // always present and always matching the daemon. libgstpipewire.so
+  // stays: the client ABI is stable, it links host libpipewire cleanly.
+  const PW_STRIP = [
+    'libpipewire-0.3.so.*',
+  ];
   // glibc core must NEVER ship either: the recursive apt closure
   // re-introduces libc6 (installed in the base image), and a bundled
   // libc.so.6/ld-linux under LD_LIBRARY_PATH breaks the HOST shell itself
@@ -391,7 +427,7 @@ async function bundleGstRuntime() {
     'libstdc++.so.6*', 'libresolv.so.2*', 'libnss_*.so.2*', 'libanl.so.1*',
     'libcrypt.so.1*',
   ];
-  for (const pattern of GL_STRIP.concat(GLIBC_STRIP)) {
+  for (const pattern of GL_STRIP.concat(DRM_STRIP, PW_STRIP, GLIBC_STRIP)) {
     const dir = path.dirname(pattern);
     const base = path.basename(pattern);
     let files = [];
@@ -401,6 +437,11 @@ async function bundleGstRuntime() {
         fs.rmSync(path.join(gstLibDir, dir, f), { recursive: true, force: true });
       }
     }
+  }
+  // spa plugins + pw modules belong to the stripped libpipewire — the host
+  // stack loads its own copies from its own compiled-in dirs.
+  for (const dir of ['spa-0.2', 'pipewire-0.3']) {
+    fs.rmSync(path.join(gstLibDir, dir), { recursive: true, force: true });
   }
   const absLinks = [];
   (function walk(dir) {
@@ -430,7 +471,6 @@ async function bundleGstRuntime() {
     ['usr/lib/x86_64-linux-gnu', 'gstreamer-1.0/libgstvideo4linux2.so'],
     ['usr/lib/x86_64-linux-gnu', 'gstreamer-1.0/libgstlibav.so'],
     ['usr/lib/x86_64-linux-gnu', 'gstreamer-1.0/libgstpipewire.so'],  // cherry-picked
-    ['usr/lib/x86_64-linux-gnu', 'libpipewire-0.3.so.0'],
     ['usr/bin', 'Xvfb'], ['usr/bin', 'gst-launch-1.0'], ['usr/bin', 'gst-inspect-1.0'],
     ['usr/bin', 'python3'], ['usr/bin', 'python3.10'], ['usr/bin', 'xdotool'],
     ['usr/lib/python3.10', 'os.py'],     // stdlib actually extracted
@@ -444,15 +484,21 @@ async function bundleGstRuntime() {
   // Every NEEDED entry of the key libs must resolve inside the bundle (the
   // runtime LD_LIBRARY_PATH contains ONLY this dir — a missing dep would be
   // a hard dlopen failure at call time, so fail the build now).
-  // Xvfb is the one intentional exception: it links libGL/libGLX/
-  // libGLdispatch DIRECTLY (checked: host ldd shows them) and must resolve
-  // them from the HOST mesa — bundling GL is forbidden (it would shadow the
-  // host mesa for the wine process too). Every graphical session ships mesa,
-  // so this is always satisfiable where Wayland sharing can exist.
+  // Three intentional exceptions:
+  //  - Xvfb links libGL/libGLX/libGLdispatch DIRECTLY (checked: host ldd
+  //    shows them) and must resolve them from the HOST mesa — bundling GL
+  //    is forbidden (it would shadow the host mesa for the wine process
+  //    too). Every graphical session ships mesa, so this is always
+  //    satisfiable where Wayland sharing can exist.
+  //  - The DRM_STRIP family (HOST_GPU set): GPU-driver support libs must
+  //    resolve from the HOST so the host GL/dri stack never loads jammy
+  //    copies (a shadowed libdrm kills ZaloCall.exe on AMDGPU-PRO hosts).
+  //  - The PW_STRIP family (HOST_PW set): the bridge uses the host
+  //    pipewire stack (see the PW_STRIP comment).
   const LDD_GATE = [
     'libgstreamer-1.0.so.0', 'gstreamer-1.0/libgstvideo4linux2.so',
     'gstreamer-1.0/libgstlibav.so', 'gstreamer-1.0/libgstpipewire.so',
-    'libpipewire-0.3.so.0', '../../bin/Xvfb', '../../bin/gst-launch-1.0',
+    '../../bin/Xvfb', '../../bin/gst-launch-1.0',
     '../../bin/gst-inspect-1.0', '../../bin/xdotool', '../../bin/python3.10',
   ];
   try {
@@ -480,6 +526,20 @@ async function bundleGstRuntime() {
       'libstdc++.so.6', 'libresolv.so.2', 'libnss_dns.so.2', 'libnss_files.so.2',
       'libnss_compat.so.2', 'libutil.so.1', 'libatomic.so.1',
     ]);
+    // GPU-driver support libs (stripped by DRM_STRIP): they must resolve
+    // from the HOST so the host GL/dri stack never loads a jammy copy
+    // (see the DRM_STRIP comment — a shadowed libdrm kills ZaloCall.exe
+    // on AMDGPU-PRO machines).
+    const HOST_GPU = new Set([
+      'libdrm.so.2', 'libdrm_amdgpu.so.1', 'libdrm_intel.so.1',
+      'libdrm_nouveau.so.2', 'libdrm_radeon.so.1', 'libzstd.so.1',
+      'libxshmfence.so.1', 'libpciaccess.so.0',
+    ]);
+    // Stripped by PW_STRIP: libgstpipewire.so resolves libpipewire from
+    // the HOST (host spa/pw-module dirs follow — the bundle ships none).
+    // Machines without host pipewire have no Wayland session, so the
+    // bridge never runs there.
+    const HOST_PW = new Set(['libpipewire-0.3.so.0']);
     const missing = [];
     let lddToolMissing = false;
     for (const f of lddFiles) {
@@ -515,7 +575,7 @@ async function bundleGstRuntime() {
         const resolved = m[2];
         const isXvfbGl = f.includes('Xvfb') && /libGL|libGLdispatch|libGLX/.test(soname);
         if (resolved.startsWith(libDir)) continue;
-        if (HOST_CORE.has(soname) || isXvfbGl) continue;
+        if (HOST_CORE.has(soname) || isXvfbGl || HOST_GPU.has(soname) || HOST_PW.has(soname)) continue;
         missing.push(path.basename(f) + ' -> ' + line.trim() + ' [resolves OUTSIDE bundle]');
       }
     }

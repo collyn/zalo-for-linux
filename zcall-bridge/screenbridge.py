@@ -114,11 +114,14 @@ def run():
 
     def create_session():
         # session_handle_token is REQUIRED by portal >= 1.20 — missing it
-        # triggers an assertion crash in xdp-session.c.
+        # triggers an assertion crash in xdp-session.c. persist_mode 0 makes
+        # the compositor ask for the source EVERY time (KDE otherwise
+        # silently re-uses the previous selection).
         iface.CreateSession(
             {
                 "handle_token": token,
                 "session_handle_token": token + "_session",
+                "persist_mode": dbus.UInt32(0),
             }
         )
 
@@ -132,7 +135,8 @@ def run():
         sys.exit(1)
 
     try:
-        iface.SelectSources(state["session"], {"types": dbus.UInt32(1), "multiple": False})
+        # 1 = monitor, 2 = window — offer both in the compositor's dialog.
+        iface.SelectSources(state["session"], {"types": dbus.UInt32(3), "multiple": False})
         # The compositor dialog stays open until the user picks a source.
         if not wait_phase("start", 120):
             print("timed out or denied waiting for source selection", file=sys.stderr)
@@ -149,13 +153,40 @@ def run():
         sys.exit(1)
 
     cmd = [
-        "gst-launch-1.0",
+        os.environ.get("ZCALL_GST_HOST_LAUNCH") or "gst-launch-1.0",
         "pipewiresrc", "path=%d" % state["node_id"],
         "!", "videoconvert",
         "!", "ximagesink", "display=%s" % DISPLAY2, "sync=false",
     ]
+    env = None
+    if "ZCALL_GST_HOST_LAUNCH" in os.environ:
+        # Host gst stack (set by the app when the host has pipewiresrc +
+        # ximagesink): strip the bundle's loader/plugin overrides so the
+        # host binary resolves its OWN libs and plugins — the bundled
+        # jammy gstpipewiresrc cannot take dma-buf/modifier buffers from
+        # modern daemons and would fail with "error alloc buffers".
+        env = dict(os.environ)
+        for k in ("LD_LIBRARY_PATH", "GST_PLUGIN_PATH", "GST_PLUGIN_SYSTEM_PATH",
+                  "GST_PLUGIN_SCANNER", "GST_REGISTRY", "GI_TYPELIB_PATH"):
+            env.pop(k, None)
     os.environ["DISPLAY"] = DISPLAY2
-    subprocess.run(cmd, check=False)
+    proc = subprocess.Popen(cmd, env=env)
+    print("gst pid %d" % proc.pid, file=sys.stderr)
+    proc.wait()
+    # The app kills gst when the share ends (capture heartbeat goes
+    # stale) — this is where python wakes up. Close the portal session so
+    # the compositor's recording indicator disappears; a session left open
+    # keeps the "screen casting" badge alive forever.
+    try:
+        iface.Close(state["session"])
+        ctx = GLib.MainContext.default()
+        for _ in range(50):
+            if ctx.pending():
+                ctx.iteration(False)
+            time.sleep(0.02)
+        print("portal session closed", file=sys.stderr)
+    except Exception as e:
+        print("close session failed: %s" % e, file=sys.stderr)
 
 
 if __name__ == "__main__":

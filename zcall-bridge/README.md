@@ -49,6 +49,16 @@ node scripts/setup-zcall-bridge.js
 - Compile `pipebridge.c` bằng mingw — máy build cần
   `gcc-mingw-w64-i686` (`sudo apt install gcc-mingw-w64-i686`); exe không
   được commit theo chính sách repo (`*.exe` trong .gitignore)
+- Compile `streamproxy.c` thành **2 shim**: `streamproxy.so` (32-bit, wine
+  classic) và `streamproxy-x86_64.so` (64-bit, wine wow64 thuần) — máy build
+  cần gcc multilib (`gcc-multilib libc6-dev-i386 libx11-dev:i386
+  libxcb1-dev:i386 libxext-dev:i386`). ⚠️ **KHÔNG được thêm 2 file `.so`
+  này vào `.gitignore`**: electron-builder tôn trọng `.gitignore` khi đóng
+  gói `extraFiles`, nên ignore = AppImage được đóng gói **thiếu shim** và
+  share screen chết lặng lẽ (bug này từng ship thật). Chúng là build
+  artifacts — CI tự compile lại ở bước SETUP nên không cần commit; nếu
+  commit thì phải chạy lại `node scripts/setup-zcall-bridge.js` sau mỗi
+  lần sửa `streamproxy.c` để tránh đóng gói binary cũ.
 
 Yêu cầu: Wine chạy được 32-bit (wow64 như Wine 11). Khi app thoát, plugin
 kill toàn bộ phiên wine của prefix (`wineserver -k` + hard-kill
@@ -283,6 +293,21 @@ screen để thử lại). Bridge tự tắt khi thoát app.
 Trên **phiên X11**, share screen hoạt động trực tiếp — không cần bridge.
 
 ### Lưu ý giới hạn
+
+- **Video call crash trên một số máy (đã thấy: Linux Mint 22 base Ubuntu 24.04
+  HWE kernel 6.14)**: crash nằm trong code ZaloCall (page fault tại
+  `0x0109176e`), không sửa được từ phía app — wow64 wine chạy ổn trên Ubuntu
+  26.04 nhưng kích hoạt race trong ZaloCall trên một số host. Giải pháp tạm:
+  chuyển sang wine classic cho máy bị ảnh hưởng:
+  ```bash
+  rm -rf ~/.config/ZaloData/zcall-wine-runtime
+  ZCALL_WINE_DOWNLOAD_URL=https://github.com/Kron4ek/Wine-Builds/releases/download/11.14/wine-11.14-amd64.tar.xz ./Zalo.AppImage
+  ```
+  (tray → Cài đặt gọi điện → tải lại; classic cần lib i386 — xem mục cài
+  thư viện phía trên). Shim đã tự ép camera MJPG 640x480, tự "kick" thiết bị
+  sau mỗi cuộc gọi, và tự từ chối thiết bị wedged (hạ cấp voice-only thay vì
+  crash) — vẫn cần `v4l2-ctl` một lần cho camera không nhận MJPG mặc định.
+
 
 - Bản kron4ek **wow64** (thuần 64-bit) không chạy được ZaloCall **trên wine
   < 9** (wow64 thử nghiệm thời 8.6, lỗi với Qt 32-bit). Từ wine 9+ chạy tốt

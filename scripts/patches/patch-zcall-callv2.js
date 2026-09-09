@@ -120,11 +120,16 @@ const REPLACEMENTS = [
   },
   {
     from: 'e.on("data",(e=>{z(e)})),e.on("end"',
-    to: 'e.on("data",(n=>{if(!e.t){e.t=!0;const t=n.toString();if(t.indexOf(TK)!==0)return e.destroy();n=t.slice(TK.length+1)}z(n)})),e.on("end"',
+    // Buffered token check: TCP can deliver the token in FRAGMENTS — the
+    // old one-shot indexOf check destroyed the socket on a partial first
+    // chunk, killing ZaloCall mid-init (page fault in its teardown on some
+    // hosts — the Mint video-call crash). Accumulate until the full token
+    // length is buffered before verifying.
+    to: 'e.on("data",(n=>{if(!e.t){e.buf=(e.buf||"")+n.toString();if(e.buf.length<=TK.length)return;if(e.buf.indexOf(TK)!==0)return e.destroy();n=e.buf.slice(TK.length+1);e.t=!0;e.buf=null}z(n)})),e.on("end"',
   },
   {
     from: 'e.on("data",(t=>{d.zsymb(4,"VafRm1",["serverSend on data","ySFwkp"],t),y||(F=!1,W(e))}))',
-    to: 'e.on("data",(t=>{if(!e.t){e.t=!0;const i=t.toString();if(i.indexOf(TK)!==0)return e.destroy();t=i.slice(TK.length+1)}d.zsymb(4,"VafRm1",["serverSend on data","ySFwkp"],t),y||(F=!1,W(e))}))',
+    to: 'e.on("data",(t=>{if(!e.t){e.buf=(e.buf||"")+t.toString();if(e.buf.length<=TK.length)return;if(e.buf.indexOf(TK)!==0)return e.destroy();t=e.buf.slice(TK.length+1);e.t=!0;e.buf=null}d.zsymb(4,"VafRm1",["serverSend on data","ySFwkp"],t),y||(F=!1,W(e))}))',
   },
   // 11. Helper restart support. The Wayland screen bridge restarts ZaloCall
   //     mid-session (DISPLAY is read at spawn time), so the helper must be
@@ -156,8 +161,10 @@ const REPLACEMENTS = [
     to: 'D=t=>{y?V(e,t):e&&!e.destroyed?G(e,t):x.push(t)',
   },
   {
-    from: 't=i.slice(TK.length+1)}d.zsymb(4,"VafRm1",["serverSend on data","ySFwkp"],t),y||(F=!1,W(e))',
-    to: 't=i.slice(TK.length+1)}W(e),d.zsymb(4,"VafRm1",["serverSend on data","ySFwkp"],t),y||(F=!1,W(e))',
+    // Chained after the buffered send-site above (its `from` matches that
+    // site's NEW `to` text — keep them in lockstep).
+    from: 't=e.buf.slice(TK.length+1);e.t=!0;e.buf=null}d.zsymb(4,"VafRm1",["serverSend on data","ySFwkp"],t),y||(F=!1,W(e))',
+    to: 't=e.buf.slice(TK.length+1);e.t=!0;e.buf=null}W(e),d.zsymb(4,"VafRm1",["serverSend on data","ySFwkp"],t),y||(F=!1,W(e))',
   },
   {
     from: 'else if(e){if(x.length){const t=x.shift();$(e,t)',

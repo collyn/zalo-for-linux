@@ -375,6 +375,11 @@ async function installDownloadedWine(userDataDir, onProgress) {
   fs.mkdirSync(userDataDir, { recursive: true });
   await downloadFile(url, tarball, onProgress);
 
+  // Wipe any previous runtime FIRST: extracting over an old tree (e.g. a
+  // classic build over a wow64 one) creates a FRANKEN-WINE mixing both
+  // loader flavors — subtle, host-dependent failures that are impossible
+  // to diagnose (it polluted every classic-vs-wow64 comparison on Mint).
+  fs.rmSync(runtimeDir, { recursive: true, force: true });
   fs.mkdirSync(runtimeDir, { recursive: true });
   execSync(`tar -xf "${tarball}" -C "${runtimeDir}" --strip-components=1`, { stdio: 'pipe' });
   fs.unlinkSync(tarball);
@@ -793,7 +798,11 @@ function launch({ userDataDir }) {
     }
 
     // A wine is only usable if it can run 32-bit executables.
-    if (validateWine(candidate, prefix)) {
+    // ZCALL_NO_VALIDATE=1 (debug): skip validation — take the first
+    // candidate. Bisect lever for the Mint video-call crash: the old
+    // releases validated against a THROWAWAY prefix, never touching the
+    // real one at launch.
+    if (process.env.ZCALL_NO_VALIDATE === '1' || validateWine(candidate, prefix)) {
       wine = candidate;
       break;
     }
@@ -836,6 +845,42 @@ function launch({ userDataDir }) {
   // for classic wines).
   applyWineEnv(wine, prefix);
 
+  // Complete any pending prefix update SYNCHRONOUSLY. Wine normally runs the
+  // update pass lazily on wineserver start — if the session ends before it
+  // finishes (or the user alternates between wine builds, e.g. bundled wow64
+  // vs a previously-downloaded classic), the stamp never persists and the
+  // "wine: configuration in ... has been updated" pass re-runs on EVERY
+  // launch. wineboot -u waits for completion (~1s when nothing is pending).
+  // ZCALL_SKIP_WINEBOOT=1 (debug): bisect lever — the old releases never
+  // touched the real prefix at launch.
+  if (process.env.ZCALL_SKIP_WINEBOOT !== '1') {
+    try {
+      spawnSync(wine, ['wineboot', '-u'], {
+        env: Object.assign({}, process.env, { WINEPREFIX: prefix, WINEDEBUG: '-all' }),
+        stdio: 'ignore',
+        timeout: 180000
+      });
+    } catch (e) {
+      debugLog('wineboot -u at launch failed: ' + e.message);
+    }
+  }
+
+  // Pin wine's audio driver to pulseaudio. When wine's pulse link breaks
+  // (seen after long sessions: "unknown resource" spam from a wedged
+  // pipewire-pulse connection), wine falls back to the ALSA driver —
+  // winealsa then grabs hw:0,0 EXCLUSIVELY and the WHOLE desktop loses
+  // sound until Zalo is killed. A broken pulse link should only silence
+  // the call, never the machine.
+  try {
+    spawnSync(wine, ['reg', 'add', 'HKCU\\Software\\Wine\\Drivers', '/v', 'Audio', '/t', 'REG_SZ', '/d', 'pulseaudio', '/f'], {
+      env: Object.assign({}, process.env, { WINEPREFIX: prefix, WINEDEBUG: '-all' }),
+      stdio: 'ignore',
+      timeout: 30000
+    });
+  } catch (e) {
+    debugLog('wine Audio=pulseaudio reg failed: ' + e.message);
+  }
+
   // Streamproxy: the capture shim is preloaded into the helper at ALL times.
   // It is inert while the bridge display is down (captures fall through to
   // the real display) and it signals a share request via a file, which the
@@ -844,11 +889,16 @@ function launch({ userDataDir }) {
   if (process.env.ZCALL_PROXY_SO) {
     process.env.ZCALL_PROXY_LOG = path.join(os.homedir(), '.config', 'ZaloData', 'zcall-proxy.log');
     process.env.ZCALL_PROXY_REQUEST = path.join(os.homedir(), '.config', 'ZaloData', 'zcall-share.request');
+    // The shim writes the region ZaloCall actually captures ("x y w h") —
+    // the bridge parks the gst window there (see trackCaptureRegion).
+    process.env.ZCALL_PROXY_REGION = path.join(os.homedir(), '.config', 'ZaloData', 'zcall-share.region');
+    // Touched by the shim while captures are live; a stale heartbeat means
+    // the share ended and the bridge must be torn down.
+    process.env.ZCALL_PROXY_HEARTBEAT = path.join(os.homedir(), '.config', 'ZaloData', 'zcall-share.heartbeat');
     // Warm the resolution cache now so the first share-screen request does
     // not pay the synchronous xrandr call while the user waits.
     try {
-      const out = execSync('xrandr --query 2>/dev/null | grep -m1 "\\*" | awk \'{print $1}\'', { encoding: 'utf8' });
-      if (/^\d+x\d+$/.test(out.trim())) cachedBridgeRes = out.trim();
+      cachedBridgeRes = bridgeScreenRes();
     } catch (e) { /* default */ }
     watchShareRequests();
   }
@@ -1244,10 +1294,142 @@ function shutdown() {
 const BRIDGE_DISPLAY = ':99';
 let bridgeProcs = [];
 let bridgeGranted = false;
+let bridgeGstPid = 0;
 let cachedBridgeRes = null;
 
 function isWaylandSession() {
   return process.env.XDG_SESSION_TYPE === 'wayland';
+}
+
+/**
+ * Virtual screen size (all monitors) for the bridge display. The FIRST
+ * connected mode (the old grep) only covers monitor #1 — ZaloCall captures
+ * the FULL root (it grabs each monitor's half), so a bridge screen sized
+ * to one monitor leaves the second half out of bounds: the proxied grab
+ * fails and ZaloCall dies mid-share. xrandr --current reports the virtual
+ * size directly: "Screen 0: ... current 3840 x 1080, ...".
+ */
+function bridgeScreenRes() {
+  try {
+    const out = execSync('xrandr --current 2>/dev/null', { encoding: 'utf8' });
+    const m = out.match(/current (\d+) x (\d+)/);
+    if (m) return m[1] + 'x' + m[2];
+  } catch (e) { /* fall back below */ }
+  try {
+    const out = execSync('xrandr --query 2>/dev/null | grep -m1 "\\*" | awk \'{print $1}\'', { encoding: 'utf8' });
+    if (/^\d+x\d+$/.test(out.trim())) return out.trim();
+  } catch (e) { /* default */ }
+  return '1920x1080';
+}
+
+/**
+ * Geometry (x/y/w/h) of the monitor the portal stream belongs to, so the
+ * bridge can park the gst window exactly where ZaloCall captures it. The
+ * stream node's media.name (e.g. "kwin-screencast-HDMI-A-1") names the
+ * monitor; xrandr maps that name to its position in the virtual screen.
+ * Unknown/all-screens sources fall back to the full virtual size at 0,0.
+ */
+function nodeGeometryForNode(nodeId, virtualRes) {
+  const fallback = { x: 0, y: 0, w: +virtualRes.split('x')[0], h: +virtualRes.split('x')[1] };
+  let mediaName = '';
+  if (nodeId) {
+    try {
+      const out = execSync('pw-cli info ' + nodeId, { encoding: 'utf8', timeout: 5000 });
+      const m = out.match(/media\.name\s*=\s*"([^"]+)"/);
+      if (m) mediaName = m[1];
+    } catch (e) { debugLog('screenbridge: pw-cli info failed: ' + e.message); }
+  }
+  try {
+    const out = execSync('xrandr --query 2>/dev/null', { encoding: 'utf8' });
+    for (const line of out.split('\n')) {
+      const mm = line.match(/^(\S+) connected.*?(\d+)x(\d+)\+(\d+)\+(\d+)/);
+      if (!mm) continue;
+      // Boundary match: "HDMI-A-1" must not match inside "HDMI-A-10"
+      // (the char after "1" is a digit) but must match after the
+      // "screencast-" dash in the media.name.
+      const re = new RegExp('(^|[^A-Za-z0-9])' + mm[1].replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '($|[^A-Za-z0-9])');
+      if (mediaName && re.test(mediaName)) {
+        const geom = { x: +mm[4], y: +mm[5], w: +mm[2], h: +mm[3] };
+        debugLog('screenbridge: shared monitor ' + mm[1] + ' at ' + geom.x + ',' + geom.y + ' ' + geom.w + 'x' + geom.h);
+        return geom;
+      }
+    }
+  } catch (e) { /* fall through */ }
+  return fallback;
+}
+
+/**
+ * One pass: move/resize every window on the bridge display to the given
+ * geometry (the gst window is the only window there).
+ */
+function placeGstWindow(tools, geom) {
+  try {
+    const xdo = tools.source === 'bundle' ? tools.tools.xdotool : 'xdotool';
+    // jammy's xdotool has NO --display flag (the old command failed
+    // silently under 2>/dev/null — the resize never ran); the display is
+    // selected via the DISPLAY env instead.
+    const env = Object.assign({}, tools.env || process.env, { DISPLAY: BRIDGE_DISPLAY });
+    execSync(`${xdo} search "" 2>/dev/null | while read wid; do ${xdo} windowsize $wid ${geom.w} ${geom.h} windowmove $wid ${geom.x} ${geom.y}; done`,
+      { stdio: 'ignore', env });
+  } catch (e) { debugLog('screenbridge xdotool: ' + e.message); }
+}
+
+let lastPlacedGeom = null;
+
+/**
+ * Read the capture region the shim reports ("x y w h").
+ */
+function readCaptureRegion() {
+  const f = process.env.ZCALL_PROXY_REGION;
+  if (!f) return null;
+  try {
+    const m = fs.readFileSync(f, 'utf8').trim().match(/^(-?\d+) (-?\d+) (\d+) (\d+)$/);
+    if (m) return { x: +m[1], y: +m[2], w: +m[3], h: +m[4] };
+  } catch (e) { /* not written yet */ }
+  return null;
+}
+
+/**
+ * Keep the gst window parked on the region ZaloCall actually captures.
+ * Runs while the bridge is alive: uses the shim-reported capture region
+ * when available (the ground truth — see the grant handler comment),
+ * falling back to the shared monitor's geometry until the first capture
+ * arrives. Re-checking every 2s also covers the window appearing late and
+ * the capture region moving mid-session (user drags the call window to
+ * another monitor).
+ */
+function trackCaptureRegion(tools, fallbackGeom) {
+  if (!screenBridgeActive()) return;
+  const region = readCaptureRegion();
+  const geom = region || fallbackGeom;
+  if (!lastPlacedGeom || geom.x !== lastPlacedGeom.x || geom.y !== lastPlacedGeom.y ||
+      geom.w !== lastPlacedGeom.w || geom.h !== lastPlacedGeom.h) {
+    lastPlacedGeom = geom;
+    if (region) debugLog('screenbridge: capture region ' + geom.x + ',' + geom.y + ' ' + geom.w + 'x' + geom.h + ' — placing gst window');
+    placeGstWindow(tools, geom);
+  }
+  // Share-ended detection: the shim touches the heartbeat while captures
+  // run. Once it goes stale, kill the pipeline — python wakes from its
+  // gst wait, closes the portal session (the compositor's recording
+  // indicator goes away) and exits, which triggers the bridge cleanup.
+  if (bridgeGranted && process.env.ZCALL_PROXY_HEARTBEAT) {
+    let hbAge = Infinity;
+    try { hbAge = (Date.now() - fs.statSync(process.env.ZCALL_PROXY_HEARTBEAT).mtimeMs) / 1000; } catch (e) { /* no heartbeat yet */ }
+    if (hbAge > 8) {
+      debugLog('screenbridge: capture heartbeat stale — share ended, stopping pipeline');
+      bridgeGranted = false;
+      if (bridgeGstPid) {
+        try { process.kill(bridgeGstPid, 'SIGTERM'); } catch (e) { /* gone */ }
+        // python normally exits within a second of gst dying; force the
+        // full teardown if it doesn't.
+        setTimeout(() => { if (screenBridgeActive() && !bridgeGranted) stopScreenBridge(); }, 5000);
+      } else {
+        stopScreenBridge();
+      }
+      return;
+    }
+  }
+  setTimeout(() => trackCaptureRegion(tools, fallbackGeom), 2000);
 }
 
 function screenBridgeActive() {
@@ -1315,15 +1497,35 @@ function bridgeTools() {
         // compiled-in /usr/lib path — mandatory on machines that never had
         // python3-gi installed.
         GI_TYPELIB_PATH: path.join(libDir, 'girepository-1.0'),
-        // libpipewire finds spa plugins relative to its own .so (dladdr)
-        // once loaded via LD_LIBRARY_PATH; the override is belt-and-braces.
-        SPA_PLUGIN_DIR: path.join(libDir, 'spa-0.2'),
+        // No SPA/PIPEWIRE overrides: the bundle deliberately ships NO
+        // pipewire client (PW_STRIP in build.js) — the bridge uses the
+        // HOST pipewire stack, which always matches the session's daemon
+        // (a bundled jammy 0.3.48 client segfaults against 1.x daemons).
       });
       // Own registry file, separate from the wine call's: identical content
       // (same bundle), but no concurrent-scan write contention when a share
       // starts mid-call. Unset -> gst falls back to its default writable
       // cache; on Full it is always set by launch() first.
       if (process.env.ZCALL_GST_REGISTRY_BRIDGE) env.GST_REGISTRY = process.env.ZCALL_GST_REGISTRY_BRIDGE;
+      // The bundled gstpipewiresrc (jammy 0.3.48) also cannot take buffers
+      // from modern daemons ("error alloc buffers: Invalid argument" on
+      // KWin 6 — no dma-buf modifier support), and a host-built plugin
+      // cannot load into the 1.20 core. When the HOST has a complete
+      // bridge gst stack, run the pipeline with the host gst-launch
+      // instead — host plugins always match the host daemon. The bundle
+      // stays the fallback (screenbridge.py strips the bundle overrides
+      // from the child env when ZCALL_GST_HOST_LAUNCH is set).
+      let hostLaunch = null;
+      try {
+        const hostInspect = execSync('which gst-inspect-1.0', { encoding: 'utf8' }).trim();
+        if (hostInspect) {
+          for (const plugin of ['pipewiresrc', 'ximagesink', 'videoconvert']) {
+            execSync(hostInspect + ' ' + plugin, { stdio: 'ignore' });
+          }
+          hostLaunch = execSync('which gst-launch-1.0', { encoding: 'utf8' }).trim();
+        }
+      } catch (e) { /* host stack incomplete — bundle fallback */ }
+      if (hostLaunch) env.ZCALL_GST_HOST_LAUNCH = hostLaunch;
       return { source: 'bundle', tools, env };
     }
     debugLog('screenbridge: gst-runtime present but bridge stack incomplete — using system tools');
@@ -1379,11 +1581,7 @@ function startScreenBridge() {
   // when the user is waiting for the permission dialog.
   let res = cachedBridgeRes;
   if (!res) {
-    res = '1920x1080';
-    try {
-      const out = execSync('xrandr --query 2>/dev/null | grep -m1 "\\*" | awk \'{print $1}\'', { encoding: 'utf8' });
-      if (/^\d+x\d+$/.test(out.trim())) res = out.trim();
-    } catch (e) { /* default */ }
+    res = bridgeScreenRes();
     cachedBridgeRes = res;
   }
   const [w, h] = res.split('x');
@@ -1429,6 +1627,12 @@ function startScreenBridge() {
 
   stopScreenBridge();
   bridgeGranted = false;
+  bridgeGstPid = 0;
+  // Stale region/heartbeat from a previous share must not steer the first
+  // placement (or fake a live share before the first capture).
+  try { fs.rmSync(process.env.ZCALL_PROXY_REGION, { force: true }); } catch (e) { /* none */ }
+  try { fs.rmSync(process.env.ZCALL_PROXY_HEARTBEAT, { force: true }); } catch (e) { /* none */ }
+  lastPlacedGeom = null;
   try {
     // Headless Xvfb holds the bridged stream; ZaloCall keeps running on the
     // real display (native UI) and the streamproxy shim redirects its
@@ -1447,12 +1651,16 @@ function startScreenBridge() {
     // bundled binary and picks up the bundle GST_*/GI_* vars. The host
     // XDG_RUNTIME_DIR / DBUS_SESSION_BUS_ADDRESS pass through untouched —
     // they ARE the session pipewire socket + portal bus the flow needs.
+    // detached: python becomes a process-group leader so stopScreenBridge
+    // can kill gst (its child) with the group on forced teardown.
     const py = spawn(tools.source === 'bundle' ? tools.tools.python3 : 'python3',
-      [pyPath, BRIDGE_DISPLAY], Object.assign({ stdio: ['ignore', 'ignore', 'pipe'] },
+      [pyPath, BRIDGE_DISPLAY], Object.assign({ stdio: ['ignore', 'ignore', 'pipe'], detached: true },
         tools.source === 'bundle' ? { env: tools.env } : {}));
     py.stderr.on('data', (d) => {
       const s = String(d).trim().slice(0, 300);
       debugLog('screenbridge: ' + s);
+      const gm = s.match(/gst pid (\d+)/);
+      if (gm) bridgeGstPid = parseInt(gm[1], 10);
       // The user granted the portal and gst is rendering into :99 — from
       // now on the shim's proxied grabs return the stream. (The helper is
       // never restarted: the shim is preloaded from app launch, and its
@@ -1460,6 +1668,18 @@ function startScreenBridge() {
       if (s.indexOf('got pipewire node') !== -1) {
         bridgeGranted = true;
         debugLog('screenbridge: granted — stream ready on ' + BRIDGE_DISPLAY);
+        // Place the gst window at the geometry of the monitor being shared,
+        // then FOLLOW THE REAL CAPTURE REGION: ZaloCall captures at the
+        // position of the monitor it considers primary — which does NOT
+        // change with the portal's source selection. The shim reports the
+        // live region via ZCALL_PROXY_REGION; parking the window there
+        // makes whatever monitor the user shares land exactly where the
+        // captures read (the shared-monitor geometry is only the initial
+        // guess before the first capture arrives).
+        const m = s.match(/node (\d+)/);
+        const nodeId = m ? parseInt(m[1], 10) : 0;
+        const geom = nodeGeometryForNode(nodeId, res);
+        trackCaptureRegion(tools, geom);
       }
     });
     py.on('exit', (code) => {
@@ -1467,16 +1687,6 @@ function startScreenBridge() {
       stopScreenBridge();
     });
     bridgeProcs.push(py);
-    // Let gst create its window, then stretch every window on the Xvfb
-    // display over the whole screen (the gst window title is
-    // "gst-launch-1.0", so match anything).
-    setTimeout(() => {
-      try {
-        const xdo = tools.source === 'bundle' ? tools.tools.xdotool : 'xdotool';
-        execSync(`${xdo} search --display ${BRIDGE_DISPLAY} "" 2>/dev/null | while read wid; do ${xdo} windowsize $wid ${w} ${h} windowmove $wid 0 0; done`,
-          Object.assign({ stdio: 'ignore' }, tools.source === 'bundle' ? { env: tools.env } : {}));
-      } catch (e) { debugLog('screenbridge xdotool: ' + e.message); }
-    }, 5000);
   } catch (e) {
     debugLog('screenbridge start failed: ' + e.message);
     return false;
@@ -1488,8 +1698,15 @@ function startScreenBridge() {
 
 function stopScreenBridge() {
   for (const p of bridgeProcs) {
-    try { if (p && !p.killed) p.kill(); } catch (e) { /* gone */ }
+    try {
+      // Group kill: python's gst child dies with it (no orphaned pipeline
+      // keeping the portal session alive after teardown).
+      if (p && !p.killed) process.kill(-p.pid, 'SIGTERM');
+    } catch (e) {
+      try { if (p && !p.killed) p.kill(); } catch (e2) { /* gone */ }
+    }
   }
+  bridgeGstPid = 0;
   bridgeProcs = [];
 }
 
