@@ -87,20 +87,68 @@ static int camera_force_yuyv(void) {
  * V4L2 query: S_FMT/TRY_FMT/G_FMT replies and ENUM_FMT/ENUM_FRAMESIZES are
  * all rewritten so no layer (winegstreamer, libv4l, Qt) can disagree about
  * what the stream carries. Any mismatch between layers is exactly what makes
- * the frame pipeline read garbage (varying fault address across runs). */
-static int camera_lock_fmt(void) {
+ * the frame pipeline read garbage (varying fault address across runs).
+ * ZCALL_CAMERA_LOCK_FMT=best — same, but the locked format is the BEST one
+ * the camera natively supports: requires >=30fps, prefers MJPG (USB
+ * bandwidth), largest resolution wins. On the typical UVC cam this picks
+ * MJPG 1280x720@30 — HD without the 720p@10fps lag the default YUYV
+ * negotiation lands on. */
+static struct { uint32_t fourcc; int w, h; } chosen_fmt = { V4L2_PIX_FMT_YUYV, 640, 480 };
+
+static int lock_fmt_mode(void) {
     static int v = -1;
-    if (v < 0) v = getenv("ZCALL_CAMERA_LOCK_FMT") != NULL;
+    if (v < 0) {
+        const char *e = getenv("ZCALL_CAMERA_LOCK_FMT");
+        v = (e && strcmp(e, "best") == 0) ? 2 : (e ? 1 : 0);
+    }
     return v;
 }
 
+static void probe_best_fmt(int fd) {
+    struct { uint32_t fourcc; int w, h; int score; } best = {0, 0, 0, 0};
+    struct v4l2_fmtdesc fd_;
+    memset(&fd_, 0, sizeof(fd_));
+    for (fd_.index = 0; ioctl(fd, VIDIOC_ENUM_FMT, &fd_) == 0; fd_.index++) {
+        struct v4l2_frmsizeenum fs;
+        memset(&fs, 0, sizeof(fs));
+        fs.pixel_format = fd_.pixelformat;
+        for (fs.index = 0; ioctl(fd, VIDIOC_ENUM_FRAMESIZES, &fs) == 0; fs.index++) {
+            if (fs.type != V4L2_FRMSIZE_TYPE_DISCRETE) continue;
+            struct v4l2_frmivalenum fi;
+            memset(&fi, 0, sizeof(fi));
+            fi.pixel_format = fd_.pixelformat;
+            fi.width = fs.discrete.width;
+            fi.height = fs.discrete.height;
+            int has30 = 0;
+            for (fi.index = 0; ioctl(fd, VIDIOC_ENUM_FRAMEINTERVALS, &fi) == 0; fi.index++) {
+                if (fi.type == V4L2_FRMIVAL_TYPE_DISCRETE &&
+                    fi.discrete.denominator >= 29 * fi.discrete.numerator) has30 = 1;
+            }
+            if (!has30) continue;
+            int score = fs.discrete.width * fs.discrete.height;
+            if (fd_.pixelformat != V4L2_PIX_FMT_MJPEG) score /= 2; /* raw formats eat USB bandwidth */
+            if (score > best.score) {
+                best.fourcc = fd_.pixelformat;
+                best.w = fs.discrete.width;
+                best.h = fs.discrete.height;
+                best.score = score;
+            }
+        }
+    }
+    if (best.score > 0) {
+        chosen_fmt.fourcc = best.fourcc;
+        chosen_fmt.w = best.w;
+        chosen_fmt.h = best.h;
+    }
+}
+
 static void lie_fmt(struct v4l2_format *f) {
-    f->fmt.pix.width = 640;
-    f->fmt.pix.height = 480;
-    f->fmt.pix.pixelformat = V4L2_PIX_FMT_YUYV;
-    f->fmt.pix.bytesperline = 640 * 2;
-    f->fmt.pix.sizeimage = 640 * 480 * 2;
+    f->fmt.pix.width = chosen_fmt.w;
+    f->fmt.pix.height = chosen_fmt.h;
+    f->fmt.pix.pixelformat = chosen_fmt.fourcc;
     f->fmt.pix.field = V4L2_FIELD_NONE;
+    /* bytesperline/sizeimage stay as the driver's real reply — for MJPG the
+     * actual frame size varies and only the driver knows the right bound. */
 }
 
 static int is_video_path(const char *path) {
@@ -215,10 +263,19 @@ static uint32_t set_camera_fmt(int fd) {
     memset(&fmt, 0, sizeof(fmt));
     fmt.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
     if (ioctl(fd, VIDIOC_G_FMT, &fmt) < 0) return 0;
-    fmt.fmt.pix.width = 640;
-    fmt.fmt.pix.height = 480;
-    uint32_t first = camera_force_yuyv() ? V4L2_PIX_FMT_YUYV : V4L2_PIX_FMT_MJPEG;
-    uint32_t second = camera_force_yuyv() ? V4L2_PIX_FMT_MJPEG : V4L2_PIX_FMT_YUYV;
+    uint32_t first, second;
+    if (lock_fmt_mode() == 2) {
+        probe_best_fmt(fd);
+        fmt.fmt.pix.width = chosen_fmt.w;
+        fmt.fmt.pix.height = chosen_fmt.h;
+        first = chosen_fmt.fourcc;
+        second = (first == V4L2_PIX_FMT_YUYV) ? V4L2_PIX_FMT_MJPEG : V4L2_PIX_FMT_YUYV;
+    } else {
+        fmt.fmt.pix.width = 640;
+        fmt.fmt.pix.height = 480;
+        first = camera_force_yuyv() ? V4L2_PIX_FMT_YUYV : V4L2_PIX_FMT_MJPEG;
+        second = camera_force_yuyv() ? V4L2_PIX_FMT_MJPEG : V4L2_PIX_FMT_YUYV;
+    }
     fmt.fmt.pix.pixelformat = first;
     if (ioctl(fd, VIDIOC_S_FMT, &fmt) == 0 && fmt.fmt.pix.pixelformat == first)
         return first;
@@ -260,9 +317,9 @@ static int wrap_open(const char *path, int flags, mode_t mode, const char *sym) 
         } else {
             uint32_t got = set_camera_fmt(fd);
             if (got == V4L2_PIX_FMT_MJPEG)
-                plog("streamproxy: camera %s -> MJPG 640x480\n", path);
+                plog("streamproxy: camera %s -> MJPG %dx%d\n", path, chosen_fmt.w, chosen_fmt.h);
             else if (got == V4L2_PIX_FMT_YUYV)
-                plog("streamproxy: camera %s -> YUYV 640x480 (%s)\n", path,
+                plog("streamproxy: camera %s -> YUYV %dx%d (%s)\n", path, chosen_fmt.w, chosen_fmt.h,
                      camera_force_yuyv() ? "forced" : "no MJPG");
             else {
                 /* Neither format accepted. Either a format-poor device (IR
@@ -419,28 +476,30 @@ int ioctl(int fd, unsigned long request, ...) {
     va_start(ap, request);
     void *arg = va_arg(ap, void *);
     va_end(ap);
-    int i = (camera_debug() || camera_force_yuyv() || camera_lock_fmt()) ? cam_fd_find(fd) : -1;
+    int i = (camera_debug() || camera_force_yuyv() || lock_fmt_mode()) ? cam_fd_find(fd) : -1;
     const char *p = (i >= 0) ? cam_fds[i].path : NULL;
     /* LOCK mode: the device enumerates exactly ONE format and ONE size, so
      * no layer can disagree about what the stream carries. */
-    if (p && camera_lock_fmt() && request == VIDIOC_ENUM_FMT) {
+    if (p && lock_fmt_mode() && request == VIDIOC_ENUM_FMT) {
         struct v4l2_fmtdesc *d = (struct v4l2_fmtdesc *)arg;
         if (d && d->index == 0) {
+            char c[5];
             d->type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
             d->flags = 0;
-            d->pixelformat = V4L2_PIX_FMT_YUYV;
-            strcpy((char *)d->description, "YUYV 4:2:2");
+            d->pixelformat = chosen_fmt.fourcc;
+            fourcc_str(chosen_fmt.fourcc, c);
+            strcpy((char *)d->description, chosen_fmt.fourcc == V4L2_PIX_FMT_MJPEG ? "Motion-JPEG" : c);
             return 0;
         }
         errno = EINVAL;
         return -1;
     }
-    if (p && camera_lock_fmt() && request == VIDIOC_ENUM_FRAMESIZES) {
+    if (p && lock_fmt_mode() && request == VIDIOC_ENUM_FRAMESIZES) {
         struct v4l2_frmsizeenum *e = (struct v4l2_frmsizeenum *)arg;
         if (e && e->index == 0) {
             e->type = V4L2_FRMSIZE_TYPE_DISCRETE;
-            e->discrete.width = 640;
-            e->discrete.height = 480;
+            e->discrete.width = chosen_fmt.w;
+            e->discrete.height = chosen_fmt.h;
             return 0;
         }
         errno = EINVAL;
@@ -459,14 +518,14 @@ int ioctl(int fd, unsigned long request, ...) {
                 f.fmt.pix.height = 480;
                 plog("streamproxy: camera %s S_FMT MJPG -> forced YUYV 640x480\n", p);
             }
-            if (camera_lock_fmt()) lie_fmt(&f);
+            if (lock_fmt_mode()) lie_fmt(&f);
             memcpy(arg, &f, sizeof(f));
             char c[5];
             fourcc_str(f.fmt.pix.pixelformat, c);
             plog("streamproxy: camera %s %s req %ux%u %s%s\n", p,
                  request == VIDIOC_S_FMT ? "S_FMT" : "TRY_FMT",
                  f.fmt.pix.width, f.fmt.pix.height, c,
-                 camera_lock_fmt() ? " (locked)" : "");
+                 lock_fmt_mode() ? " (locked)" : "");
         }
     }
     int ret = real_ioctl_fn(fd, request, arg);
@@ -474,7 +533,7 @@ int ioctl(int fd, unsigned long request, ...) {
         if (request == VIDIOC_S_FMT || request == VIDIOC_TRY_FMT || request == VIDIOC_G_FMT) {
             struct v4l2_format f; char c[5];
             if (arg && ret == 0) { memcpy(&f, arg, sizeof(f));
-                if (camera_lock_fmt()) { lie_fmt(&f); memcpy(arg, &f, sizeof(f)); }
+                if (lock_fmt_mode()) { lie_fmt(&f); memcpy(arg, &f, sizeof(f)); }
                 fourcc_str(f.fmt.pix.pixelformat, c);
                 plog("streamproxy: camera %s fmt -> %ux%u %s (ok)\n", p,
                      f.fmt.pix.width, f.fmt.pix.height, c); }
