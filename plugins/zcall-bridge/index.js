@@ -15,7 +15,7 @@
  *      actually running a 32-bit exe (pipebridge --version).
  *   2. If no usable wine exists on first run, ASKS the user (always-on-top
  *      window with browse/download options) and downloads a portable wine
- *      (wow64 11.14, ~94MB) into <userData>/zcall-wine-runtime/ AND a
+ *      (classic 11.17, ~96MB) into <userData>/zcall-wine-runtime/ AND a
  *      64-bit GStreamer tree (release asset, ~120MB) into
  *      <userData>/zcall-gst-runtime/ with a progress window — no root
  *      needed, no host 32-bit libs, works on any distro.
@@ -51,15 +51,21 @@ const os = require('os');
 const path = require('path');
 const https = require('https');
 
-// Recommended build: 11.14 wow64 (~94MB / ~850MB extracted). Video calls
-// verified working on it; wine 8.6 is lighter (54MB) but its msvcp140/ucrtbase
-// lack _Throw_C_error, which crashes ZaloCall when the video pipeline hits an
-// error (e.g. codec/format negotiation).
-// NOTE: this is the SAME pure-wow64 build the Full variants bundle (see
-// WINE_DOWNLOAD_URL_WOW64 in scripts/build.js) — a downloaded wine therefore
-// needs NO host 32-bit libraries. Keep the two constants in sync.
+// Recommended build: 11.17 classic amd64 (~96MB / ~850MB extracted). Video
+// calls verified working on it (Mint 2026-09-10). The wow64 build crashes
+// ZaloCall's DirectShow camera path on some hosts — wine qcap WoW64
+// media-type marshaling bug (upstream MR10269/10377, unmerged as of 11.17;
+// minimal repro in zcall-bridge/camtest.c). Classic has no WoW64 boundary
+// and is immune — it only needs the host's 32-bit libraries, which the app
+// guides the user through when validation fails (getI386InstallHint).
+// NOTE: this is the SAME classic build the Full variants bundle (see
+// WINE_DOWNLOAD_URL_CLASSIC in scripts/build.js). Keep the two in sync.
 const WINE_DOWNLOAD_URL =
-  'https://github.com/Kron4ek/Wine-Builds/releases/download/11.14/wine-11.14-amd64-wow64.tar.xz';
+  'https://github.com/Kron4ek/Wine-Builds/releases/download/11.17/wine-11.17-amd64.tar.xz';
+// wow64 alternative (zero-install, needs NO host 32-bit libraries) — for
+// machines where classic is impractical: ZCALL_WINE_DOWNLOAD_URL=<this>
+const WINE_WOW64_DOWNLOAD_URL =
+  'https://github.com/Kron4ek/Wine-Builds/releases/download/11.17/wine-11.17-amd64-wow64.tar.xz';
 const RUNTIME_DIRNAME = 'zcall-wine-runtime';
 const CONFIG_FILENAME = 'zcall-config.json';
 const GST_DIRNAME = 'zcall-gst-runtime';
@@ -129,7 +135,28 @@ function findWine() {
 
 function findDownloadedWine(userDataDir) {
   const p = path.join(userDataDir, RUNTIME_DIRNAME, 'bin', 'wine');
-  return fs.existsSync(p) ? p : null;
+  if (!fs.existsSync(p)) return null;
+  // The runtime must match the variant the app is configured to download
+  // (classic vs wow64). A stale variant from an older release would
+  // silently keep the crashing wow64 path alive on affected machines.
+  const expected = process.env.ZCALL_WINE_DOWNLOAD_URL || WINE_DOWNLOAD_URL;
+  let source = null;
+  try { source = fs.readFileSync(path.join(userDataDir, RUNTIME_DIRNAME, '.zcall-wine-source'), 'utf8').trim(); } catch (e) { /* old dir, no marker */ }
+  if (source !== expected) {
+    // Mismatched or marker-less: discard — the next install pass (which
+    // wipes before extracting) or the setup dialog replaces it.
+    try { fs.rmSync(path.join(userDataDir, RUNTIME_DIRNAME), { recursive: true, force: true }); } catch (e) { /* locked — treated as absent */ }
+    return null;
+  }
+  return p;
+}
+
+/** Classic (non-wow64) wine? The classic build ships i386-unix; pure-wow64
+ * does not. Classic has no WoW64 marshaling boundary — the qcap camera bug
+ * that crashes ZaloCall on affected hosts cannot trigger there. */
+function isClassicWine(winePath) {
+  const libWine = path.join(path.dirname(winePath), '..', 'lib', 'wine');
+  return fs.existsSync(path.join(libWine, 'i386-unix'));
 }
 
 /**
@@ -185,11 +212,7 @@ function findBundledGstRuntime(userDataDir) {
  * proxying, so defaulting conservative is the right trade.
  */
 function selectProxySo(winePath) {
-  const libWine = path.join(path.dirname(winePath), '..', 'lib', 'wine');
-  const wow64Pure =
-    fs.existsSync(path.join(libWine, 'x86_64-unix')) &&
-    !fs.existsSync(path.join(libWine, 'i386-unix'));
-  const name = wow64Pure ? 'streamproxy-x86_64.so' : 'streamproxy.so';
+  const name = isClassicWine(winePath) ? 'streamproxy.so' : 'streamproxy-x86_64.so';
   return zcallBridgePath(name);
 }
 
@@ -208,6 +231,17 @@ function applyWineEnv(wine, prefix) {
   if (!process.env.WINEDEBUG) process.env.WINEDEBUG = '-all';
   const proxy = selectProxySo(wine);
   if (fs.existsSync(proxy)) process.env.ZCALL_PROXY_SO = proxy;
+  // Classic wine: lock the camera to YUYV 640x480@30. Wine's DirectShow
+  // capture advertises RGB24 at the device's native sizes, and ZaloCall
+  // then negotiates 1280x720 — which most UVC cams only deliver at 10fps
+  // (the "laggy video" symptom). 640x480 is natively 30fps on virtually
+  // every UVC camera, so the stream stays smooth end to end. User-set
+  // levers win: only default when no camera env is present.
+  if (isClassicWine(wine) && !process.env.ZCALL_CAMERA_LOCK_FMT &&
+      !process.env.ZCALL_CAMERA_FORCE_YUYV && !process.env.ZCALL_CAMERA_PASSTHROUGH &&
+      !process.env.ZCALL_CAMERA_HIDE) {
+    process.env.ZCALL_CAMERA_LOCK_FMT = '1';
+  }
 }
 
 /**
@@ -386,6 +420,10 @@ async function installDownloadedWine(userDataDir, onProgress) {
 
   const wine = path.join(runtimeDir, 'bin', 'wine');
   if (!fs.existsSync(wine)) throw new Error('wine binary not found after extract');
+  // Variant marker: the runtime dir must match the wine the app is configured
+  // for. findDownloadedWine() discards a mismatch (classic vs wow64) so a
+  // URL change can never silently keep serving the old variant.
+  fs.writeFileSync(path.join(runtimeDir, '.zcall-wine-source'), url);
   return wine;
 }
 
@@ -517,8 +555,9 @@ function showAskWindow(failedWine) {
   </style></head><body>
     <h3>Zalo — Tính năng gọi điện</h3>
     <p>${headLine}<br>
-       Sẽ tải ~94MB (Wine) + ~${GST_DOWNLOAD_MB}MB (GStreamer) về lưu trong dữ liệu
-       của Zalo — không cần quyền quản trị, không cài gì vào hệ thống.
+       Sẽ tải ~96MB (Wine) + ~${GST_DOWNLOAD_MB}MB (GStreamer) về lưu trong dữ liệu
+       của Zalo — không cần quyền quản trị, không cài gì vào hệ thống
+       (Wine có thể cần thư viện 32-bit; app sẽ hiện hướng dẫn cài khi thiếu).
        Cần ~2GB ổ đĩa trống để giải nén.</p>
     ${hintHtml}
     <div id="url" title="Mở nguồn tải trong trình duyệt">Nguồn tải: ${downloadUrl}</div>
@@ -691,13 +730,15 @@ async function promptAndInstall(userDataDir, failedWine) {
     });
 
     // Verify the freshly downloaded wine actually works on this machine.
-    // wow64 needs no 32-bit libraries — a failure here is a machine-level
-    // issue (too-old glibc, corrupt download, ...).
+    // The classic build needs the host's 32-bit libraries — a failure here
+    // is usually missing i386 packages (the dialog below shows the exact
+    // distro command), a too-old glibc, or a corrupt download.
     if (!validateWine(wine, prefix)) {
       throw new Error(
-        'Wine tải về không chạy được trên máy này (bản wow64 không cần thư viện 32-bit).\n\n' +
-        'Thử: Cài đặt gọi điện → "Xóa Wine + GStreamer đã tải về" rồi tải lại.\n' +
-        'Nếu vẫn lỗi: máy thiếu glibc ≥ 2.35 hoặc file tải về bị hỏng.'
+        'Wine tải về không chạy được trên máy này.\n\n' +
+        'Thường do thiếu thư viện 32-bit — cài theo lệnh trong cửa sổ hướng dẫn\n' +
+        '(hoặc mục "Cài đặt gọi điện" → xóa rồi tải lại).\n' +
+        'Nếu đã cài đủ mà vẫn lỗi: máy thiếu glibc ≥ 2.35 hoặc file tải về bị hỏng.'
       );
     }
 
@@ -815,8 +856,9 @@ function launch({ userDataDir }) {
 
     // Downloaded runtime exists but cannot run: re-downloading would loop
     // forever — guide the user instead, once, without nagging every launch.
-    // (wow64 needs no 32-bit libs, so this is a machine-level failure —
-    // too-old glibc, corrupt download — with a delete-and-redownload path.)
+    // (The classic build needs the host's 32-bit libs; a failure here is
+    // usually missing i386 packages — the settings dialog shows the exact
+    // distro command — or a too-old glibc / corrupt download.)
     if (downloadedWine && failedWine === downloadedWine) {
       console.error('[zcall-bridge] downloaded wine broken');
       if (cfg.wineSetup !== 'broken' && process.env.ZCALL_AUTO_SETUP !== '1') {
@@ -841,14 +883,14 @@ function launch({ userDataDir }) {
   }
 
   // Export for the patched main-dist spawn code (also picks the matching
-  // shim: 64-bit for pure-wow64 wines like the bundled Full runtime, 32-bit
-  // for classic wines).
+  // shim: 32-bit for classic wines like the bundled Full runtime, 64-bit
+  // for pure-wow64 wines).
   applyWineEnv(wine, prefix);
 
   // Complete any pending prefix update SYNCHRONOUSLY. Wine normally runs the
   // update pass lazily on wineserver start — if the session ends before it
-  // finishes (or the user alternates between wine builds, e.g. bundled wow64
-  // vs a previously-downloaded classic), the stamp never persists and the
+  // finishes (or the user alternates between wine builds, e.g. bundled
+  // classic vs a previously-downloaded wow64), the stamp never persists and the
   // "wine: configuration in ... has been updated" pass re-runs on EVERY
   // launch. wineboot -u waits for completion (~1s when nothing is pending).
   // ZCALL_SKIP_WINEBOOT=1 (debug): bisect lever — the old releases never
@@ -960,9 +1002,11 @@ function showBrokenWineDialog(userDataDir, winePath) {
     type: 'warning',
     title: 'Zalo — Tính năng gọi điện',
     message: 'Wine tải về không chạy được trên máy này',
-    detail: 'Bản wine tải về (wow64) không cần thư viện 32-bit — lỗi thường do ' +
-      'hệ thống quá cũ (cần glibc ≥ 2.35) hoặc file bị hỏng khi tải.\n\n' +
-      'Hãy xóa bản cũ và tải lại.\n' +
+    detail: 'Bản wine tải về (classic) cần thư viện 32-bit của hệ thống — ' +
+      'lỗi thường do thiếu gói i386, hệ thống quá cũ (cần glibc ≥ 2.35) ' +
+      'hoặc file bị hỏng khi tải.\n\n' +
+      'Cài thư viện 32-bit theo hướng dẫn trong mục Cài đặt gọi điện, ' +
+      'hoặc xóa bản cũ và tải lại.\n' +
       'Wine đã tải: ' + winePath,
     buttons: ['Xóa và tải lại', 'Để sau'],
     defaultId: 1,

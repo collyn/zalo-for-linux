@@ -22,6 +22,7 @@
  */
 #define _GNU_SOURCE
 #include <dlfcn.h>
+#include <errno.h>
 #include <fcntl.h>
 #include <unistd.h>
 #include <stdarg.h>
@@ -82,8 +83,55 @@ static int camera_force_yuyv(void) {
     return v;
 }
 
+/* ZCALL_CAMERA_LOCK_FMT=1 — present ONE fixed format (YUYV 640x480) on every
+ * V4L2 query: S_FMT/TRY_FMT/G_FMT replies and ENUM_FMT/ENUM_FRAMESIZES are
+ * all rewritten so no layer (winegstreamer, libv4l, Qt) can disagree about
+ * what the stream carries. Any mismatch between layers is exactly what makes
+ * the frame pipeline read garbage (varying fault address across runs). */
+static int camera_lock_fmt(void) {
+    static int v = -1;
+    if (v < 0) v = getenv("ZCALL_CAMERA_LOCK_FMT") != NULL;
+    return v;
+}
+
+static void lie_fmt(struct v4l2_format *f) {
+    f->fmt.pix.width = 640;
+    f->fmt.pix.height = 480;
+    f->fmt.pix.pixelformat = V4L2_PIX_FMT_YUYV;
+    f->fmt.pix.bytesperline = 640 * 2;
+    f->fmt.pix.sizeimage = 640 * 480 * 2;
+    f->fmt.pix.field = V4L2_FIELD_NONE;
+}
+
 static int is_video_path(const char *path) {
     return path && (strstr(path, "/dev/video") || strstr(path, "/dev/v4l"));
+}
+
+/* ZCALL_CAMERA_LOOPBACK=/dev/videoN — redirect every real-camera open to the
+ * loopback device. The host 64-bit gst pipeline (proven healthy on the Mint
+ * laptop) reads the real webcam and feeds the loopback; ZaloCall sees a
+ * boring, consistent virtual device instead of the flaky USB camera through
+ * the 32-bit stack. No fmt forcing/refusal/kick on the loopback path — the
+ * producer owns the device state. */
+static const char *camera_loopback(void) {
+    static const char *v = NULL;
+    if (v == NULL) v = getenv("ZCALL_CAMERA_LOOPBACK");
+    return v;
+}
+
+/* ZCALL_CAMERA_HIDE=1 — every camera open fails with ENODEV: wine's device
+ * enumeration (open-based) sees NO camera, exactly like modprobe -r uvcvideo
+ * — which is the one configuration verified stable on the Mint laptop
+ * (video call connects, remote video displays, no local camera, no crash). */
+static int camera_hide(void) {
+    static int v = -1;
+    if (v < 0) v = getenv("ZCALL_CAMERA_HIDE") != NULL;
+    return v;
+}
+
+static int is_loopback_path(const char *path) {
+    const char *lp = camera_loopback();
+    return lp && path && strcmp(path, lp) == 0;
 }
 
 /* Track camera fds (open -> close) so the ioctl tracer only logs V4L2 fds
@@ -195,8 +243,17 @@ static int wrap_open(const char *path, int flags, mode_t mode, const char *sym) 
         if (!real_open) real_open = (open_fn)dlsym(RTLD_NEXT, "open");
         fn = real_open;
     }
+    if (camera_hide() && is_video_path(path)) {
+        plog("streamproxy: camera %s hidden (ENODEV)\n", path);
+        errno = ENODEV;
+        return -1;
+    }
+    if (camera_loopback() && is_video_path(path) && !is_loopback_path(path)) {
+        plog("streamproxy: camera %s -> redirected to loopback %s\n", path, camera_loopback());
+        path = camera_loopback();
+    }
     int fd = fn(path, flags, mode);
-    if (fd >= 0 && is_video_path(path)) {
+    if (fd >= 0 && is_video_path(path) && !is_loopback_path(path)) {
         if (camera_passthrough()) {
             if (camera_debug())
                 plog("streamproxy: camera %s passthrough open (no fmt force)\n", path);
@@ -336,7 +393,7 @@ int close(int fd) {
         cam_fd_remove(fd);
         if (cam_open_count > 0) {
             cam_open_count--;
-            if (cam_open_count == 0 && !camera_passthrough()) {
+            if (cam_open_count == 0 && !camera_passthrough() && !camera_loopback()) {
                 /* Last camera fd in the process closed — normalize the device.
                  * Best-effort on video0 (the real webcam). */
                 kick_camera("/dev/video0");
@@ -362,8 +419,33 @@ int ioctl(int fd, unsigned long request, ...) {
     va_start(ap, request);
     void *arg = va_arg(ap, void *);
     va_end(ap);
-    int i = (camera_debug() || camera_force_yuyv()) ? cam_fd_find(fd) : -1;
+    int i = (camera_debug() || camera_force_yuyv() || camera_lock_fmt()) ? cam_fd_find(fd) : -1;
     const char *p = (i >= 0) ? cam_fds[i].path : NULL;
+    /* LOCK mode: the device enumerates exactly ONE format and ONE size, so
+     * no layer can disagree about what the stream carries. */
+    if (p && camera_lock_fmt() && request == VIDIOC_ENUM_FMT) {
+        struct v4l2_fmtdesc *d = (struct v4l2_fmtdesc *)arg;
+        if (d && d->index == 0) {
+            d->type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+            d->flags = 0;
+            d->pixelformat = V4L2_PIX_FMT_YUYV;
+            strcpy((char *)d->description, "YUYV 4:2:2");
+            return 0;
+        }
+        errno = EINVAL;
+        return -1;
+    }
+    if (p && camera_lock_fmt() && request == VIDIOC_ENUM_FRAMESIZES) {
+        struct v4l2_frmsizeenum *e = (struct v4l2_frmsizeenum *)arg;
+        if (e && e->index == 0) {
+            e->type = V4L2_FRMSIZE_TYPE_DISCRETE;
+            e->discrete.width = 640;
+            e->discrete.height = 480;
+            return 0;
+        }
+        errno = EINVAL;
+        return -1;
+    }
     if (p && (request == VIDIOC_S_FMT || request == VIDIOC_TRY_FMT)) {
         struct v4l2_format f;
         if (arg) {
@@ -375,14 +457,16 @@ int ioctl(int fd, unsigned long request, ...) {
                 f.fmt.pix.pixelformat = V4L2_PIX_FMT_YUYV;
                 f.fmt.pix.width = 640;
                 f.fmt.pix.height = 480;
-                memcpy(arg, &f, sizeof(f));
                 plog("streamproxy: camera %s S_FMT MJPG -> forced YUYV 640x480\n", p);
             }
+            if (camera_lock_fmt()) lie_fmt(&f);
+            memcpy(arg, &f, sizeof(f));
             char c[5];
             fourcc_str(f.fmt.pix.pixelformat, c);
-            plog("streamproxy: camera %s %s req %ux%u %s\n", p,
+            plog("streamproxy: camera %s %s req %ux%u %s%s\n", p,
                  request == VIDIOC_S_FMT ? "S_FMT" : "TRY_FMT",
-                 f.fmt.pix.width, f.fmt.pix.height, c);
+                 f.fmt.pix.width, f.fmt.pix.height, c,
+                 camera_lock_fmt() ? " (locked)" : "");
         }
     }
     int ret = real_ioctl_fn(fd, request, arg);
@@ -390,6 +474,7 @@ int ioctl(int fd, unsigned long request, ...) {
         if (request == VIDIOC_S_FMT || request == VIDIOC_TRY_FMT || request == VIDIOC_G_FMT) {
             struct v4l2_format f; char c[5];
             if (arg && ret == 0) { memcpy(&f, arg, sizeof(f));
+                if (camera_lock_fmt()) { lie_fmt(&f); memcpy(arg, &f, sizeof(f)); }
                 fourcc_str(f.fmt.pix.pixelformat, c);
                 plog("streamproxy: camera %s fmt -> %ux%u %s (ok)\n", p,
                      f.fmt.pix.width, f.fmt.pix.height, c); }

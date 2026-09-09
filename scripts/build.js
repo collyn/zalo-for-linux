@@ -110,12 +110,16 @@ async function main() {
   }
 }
 
-// Full variants bundle the pure-64-bit (wow64) wine build: 32-bit Windows
-// code runs with NO host 32-bit libraries. WINE_DOWNLOAD_URL in
-// plugins/zcall-bridge/index.js is the IDENTICAL URL — the standard-variant
-// first-run download matches the bundled runtime; keep the two in sync.
-const WINE_DOWNLOAD_URL_WOW64 =
-  'https://github.com/Kron4ek/Wine-Builds/releases/download/11.14/wine-11.14-amd64-wow64.tar.xz';
+// Full variants bundle the CLASSIC wine build: the wow64 build crashes
+// ZaloCall's DirectShow camera path on some hosts (wine qcap WoW64
+// media-type marshaling bug — upstream MR10269/10377, unmerged as of
+// 11.17). Classic has no WoW64 boundary and is immune; it needs the host's
+// 32-bit libraries, which the app's settings dialog guides users through.
+// WINE_DOWNLOAD_URL in plugins/zcall-bridge/index.js is the IDENTICAL URL —
+// the standard-variant first-run download matches the bundled runtime;
+// keep the two in sync.
+const WINE_DOWNLOAD_URL_CLASSIC =
+  'https://github.com/Kron4ek/Wine-Builds/releases/download/11.17/wine-11.17-amd64.tar.xz';
 
 // GStreamer packages bundled for the Full variant (64-bit, Ubuntu jammy so
 // the glibc floor is 2.35 — Ubuntu 22.04/Mint 21+). v4l2src (plugins-good)
@@ -185,9 +189,9 @@ async function bundleWineRuntime() {
     return;
   }
   const tarball = path.join(APP_DIR, 'native', 'wine-bundle.tar.xz');
-  logger.info('Downloading portable wine (wow64) for the Full variant...');
+  logger.info('Downloading portable wine (classic) for the Full variant...');
   try {
-    execSync(`curl -L --fail -o "${tarball}" "${WINE_DOWNLOAD_URL_WOW64}"`, {
+    execSync(`curl -L --fail -o "${tarball}" "${WINE_DOWNLOAD_URL_CLASSIC}"`, {
       cwd: BASE_DIR, stdio: 'inherit'
     });
     fs.mkdirSync(target, { recursive: true });
