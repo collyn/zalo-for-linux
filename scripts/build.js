@@ -416,6 +416,10 @@ async function bundleGstRuntime() {
   // stays: the client ABI is stable, it links host libpipewire cleanly.
   const PW_STRIP = [
     'libpipewire-0.3.so.*',
+    // libspa base lib: host libpipewire may NEED it (distro-dependent) and
+    // would otherwise resolve the jammy copy under the prepended
+    // LD_LIBRARY_PATH — same shadowing class as DRM_STRIP.
+    'libspa-0.2.so.*',
   ];
   // glibc core must NEVER ship either: the recursive apt closure
   // re-introduces libc6 (installed in the base image), and a bundled
@@ -539,7 +543,7 @@ async function bundleGstRuntime() {
     // the HOST (host spa/pw-module dirs follow — the bundle ships none).
     // Machines without host pipewire have no Wayland session, so the
     // bridge never runs there.
-    const HOST_PW = new Set(['libpipewire-0.3.so.0']);
+    const HOST_PW = new Set(['libpipewire-0.3.so.0', 'libspa-0.2.so.0']);
     const missing = [];
     let lddToolMissing = false;
     for (const f of lddFiles) {

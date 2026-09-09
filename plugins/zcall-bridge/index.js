@@ -865,21 +865,14 @@ function launch({ userDataDir }) {
     }
   }
 
-  // Pin wine's audio driver to pulseaudio. When wine's pulse link breaks
-  // (seen after long sessions: "unknown resource" spam from a wedged
-  // pipewire-pulse connection), wine falls back to the ALSA driver —
-  // winealsa then grabs hw:0,0 EXCLUSIVELY and the WHOLE desktop loses
-  // sound until Zalo is killed. A broken pulse link should only silence
-  // the call, never the machine.
-  try {
-    spawnSync(wine, ['reg', 'add', 'HKCU\\Software\\Wine\\Drivers', '/v', 'Audio', '/t', 'REG_SZ', '/d', 'pulseaudio', '/f'], {
-      env: Object.assign({}, process.env, { WINEPREFIX: prefix, WINEDEBUG: '-all' }),
-      stdio: 'ignore',
-      timeout: 30000
-    });
-  } catch (e) {
-    debugLog('wine Audio=pulseaudio reg failed: ' + e.message);
-  }
+  // NOTE: do NOT pin the Audio driver here. Pinning "pulseaudio" broke the
+  // microphone (winepulse capture fails on pipewire-pulse — the mic
+  // vanishes from the call); the default "pulseaudio,alsa" order keeps the
+  // mic working via the ALSA fallback. The old machine-wide audio break
+  // (winealsa grabbing hw:0,0 after a wedged pulse link) is mitigated by
+  // the bridge now closing its portal sessions cleanly, so the wedge
+  // trigger is gone. If the wedge ever returns, fix the root cause
+  // instead of re-pinning.
 
   // Streamproxy: the capture shim is preloaded into the helper at ALL times.
   // It is inert while the bridge display is down (captures fall through to
@@ -1295,6 +1288,8 @@ const BRIDGE_DISPLAY = ':99';
 let bridgeProcs = [];
 let bridgeGranted = false;
 let bridgeGstPid = 0;
+let bridgeGen = 0;
+let sawBridgeHeartbeat = false;
 let cachedBridgeRes = null;
 
 function isWaylandSession() {
@@ -1412,17 +1407,24 @@ function trackCaptureRegion(tools, fallbackGeom) {
   // run. Once it goes stale, kill the pipeline — python wakes from its
   // gst wait, closes the portal session (the compositor's recording
   // indicator goes away) and exits, which triggers the bridge cleanup.
+  // A MISSING file means "no capture has happened yet", not "expired":
+  // the stale clock only starts after the first heartbeat is observed.
   if (bridgeGranted && process.env.ZCALL_PROXY_HEARTBEAT) {
-    let hbAge = Infinity;
-    try { hbAge = (Date.now() - fs.statSync(process.env.ZCALL_PROXY_HEARTBEAT).mtimeMs) / 1000; } catch (e) { /* no heartbeat yet */ }
-    if (hbAge > 8) {
+    let hbAge = 0;
+    try {
+      hbAge = (Date.now() - fs.statSync(process.env.ZCALL_PROXY_HEARTBEAT).mtimeMs) / 1000;
+      sawBridgeHeartbeat = true;
+    } catch (e) { /* not written yet — skip the stale check this tick */ }
+    if (sawBridgeHeartbeat && hbAge > 8) {
       debugLog('screenbridge: capture heartbeat stale — share ended, stopping pipeline');
       bridgeGranted = false;
       if (bridgeGstPid) {
         try { process.kill(bridgeGstPid, 'SIGTERM'); } catch (e) { /* gone */ }
         // python normally exits within a second of gst dying; force the
-        // full teardown if it doesn't.
-        setTimeout(() => { if (screenBridgeActive() && !bridgeGranted) stopScreenBridge(); }, 5000);
+        // full teardown if it doesn't. Generation guard: a bridge started
+        // after this timer was armed must not be killed by it.
+        const gen = bridgeGen;
+        setTimeout(() => { if (gen === bridgeGen && screenBridgeActive() && !bridgeGranted) stopScreenBridge(); }, 5000);
       } else {
         stopScreenBridge();
       }
@@ -1628,6 +1630,8 @@ function startScreenBridge() {
   stopScreenBridge();
   bridgeGranted = false;
   bridgeGstPid = 0;
+  bridgeGen++;
+  sawBridgeHeartbeat = false;
   // Stale region/heartbeat from a previous share must not steer the first
   // placement (or fake a live share before the first capture).
   try { fs.rmSync(process.env.ZCALL_PROXY_REGION, { force: true }); } catch (e) { /* none */ }
@@ -1646,6 +1650,15 @@ function startScreenBridge() {
       tools.source === 'bundle' ? { env: tools.env } : {}));
     xvfb.stderr.on('data', (d) => debugLog('screenbridge xvfb: ' + String(d).trim().slice(0, 200)));
     bridgeProcs.push(xvfb);
+    // A wedged .X99-lock or a broken host GL would kill Xvfb silently —
+    // python then fails on the display and the share stays black with no
+    // explanation. Detect the early death and log it.
+    setTimeout(() => {
+      if (screenBridgeActive() && xvfb.exitCode !== null) {
+        debugLog('screenbridge: Xvfb died right after start (exit ' + xvfb.exitCode + ') — tearing down');
+        stopScreenBridge();
+      }
+    }, 1500);
     // screenbridge.py inherits os.environ from this spawn, so its nested
     // bare `gst-launch-1.0` resolves through the prepended PATH to the
     // bundled binary and picks up the bundle GST_*/GI_* vars. The host
@@ -1656,6 +1669,7 @@ function startScreenBridge() {
     const py = spawn(tools.source === 'bundle' ? tools.tools.python3 : 'python3',
       [pyPath, BRIDGE_DISPLAY], Object.assign({ stdio: ['ignore', 'ignore', 'pipe'], detached: true },
         tools.source === 'bundle' ? { env: tools.env } : {}));
+    py.isGroupLeader = true;
     py.stderr.on('data', (d) => {
       const s = String(d).trim().slice(0, 300);
       debugLog('screenbridge: ' + s);
@@ -1699,9 +1713,16 @@ function startScreenBridge() {
 function stopScreenBridge() {
   for (const p of bridgeProcs) {
     try {
-      // Group kill: python's gst child dies with it (no orphaned pipeline
-      // keeping the portal session alive after teardown).
-      if (p && !p.killed) process.kill(-p.pid, 'SIGTERM');
+      if (p && !p.killed) {
+        // python is a detached group leader — kill the whole group so its
+        // gst child never orphans and keeps the portal session alive.
+        // Xvfb is NOT a group leader: kill(-pid) would target a
+        // nonexistent group (ESRCH on every teardown) and, worse, a
+        // recycled pid could collide with an unrelated orphaned group —
+        // kill it directly.
+        if (p.isGroupLeader) process.kill(-p.pid, 'SIGTERM');
+        else p.kill('SIGTERM');
+      }
     } catch (e) {
       try { if (p && !p.killed) p.kill(); } catch (e2) { /* gone */ }
     }

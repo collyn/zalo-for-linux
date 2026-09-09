@@ -50,6 +50,17 @@ def run():
     def on_response(response, results, message=None):
         try:
             if response != 0:
+                # Some backends only support monitor sources — retry the
+                # selection without the window type before giving up.
+                if state["phase"] == "sources" and not state.get("retried"):
+                    state["retried"] = True
+                    print("source selection rejected (%s), retrying monitors-only" % response, file=sys.stderr)
+                    try:
+                        iface.SelectSources(state["session"],
+                                            {"types": dbus.UInt32(1), "multiple": False})
+                        return
+                    except Exception as e:
+                        print("monitors-only retry failed: %s" % e, file=sys.stderr)
                 print("portal response %s, denying" % response, file=sys.stderr)
                 state["denied"] = True
                 state["loop"].quit()

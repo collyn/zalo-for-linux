@@ -116,6 +116,7 @@ static int wrap_open(const char *path, int flags, mode_t mode, const char *sym) 
     static open_fn real_open = NULL;
     static open_fn real_open64 = NULL;
     open_fn fn;
+    if (!real_close_fn) real_close_fn = (int (*)(int))dlsym(RTLD_NEXT, "close");
     if (sym[4] == '6') {           /* "open64" */
         if (!real_open64) real_open64 = (open_fn)dlsym(RTLD_NEXT, "open64");
         fn = real_open64;
@@ -393,8 +394,16 @@ static Display *ensure_src_dpy(void) {
         if (!n) n = ":99";
         src_dpy = XOpenDisplay(n);
         if (src_dpy) {
-            orig_io_handler = XSetIOErrorHandler(src_io_handler);
-            orig_error_handler = XSetErrorHandler(src_error_handler);
+            // Capture the ORIGINAL handlers only on the FIRST install: on
+            // every later open the "currently installed" handler IS this
+            // shim itself — re-capturing would make orig point at us and
+            // the next foreign-display error would recurse forever (stack
+            // overflow). Re-installing ours each open keeps the chain
+            // wine -> shim intact across bridge restarts.
+            if (!orig_io_handler) orig_io_handler = XSetIOErrorHandler(src_io_handler);
+            else XSetIOErrorHandler(src_io_handler);
+            if (!orig_error_handler) orig_error_handler = XSetErrorHandler(src_error_handler);
+            else XSetErrorHandler(src_error_handler);
             src_scr_w = DisplayWidth(src_dpy, DefaultScreen(src_dpy));
             src_scr_h = DisplayHeight(src_dpy, DefaultScreen(src_dpy));
             plog("streamproxy: libX11 src %s opened (%dx%d)\n", n,
@@ -414,7 +423,7 @@ static Display *ensure_src_dpy(void) {
  * fall through to the real display instead, same as when the bridge is
  * down. */
 static int region_fits(int x, int y, unsigned int w, unsigned int h) {
-    if (!src_dpy) return 0;
+    if (!src_scr_w) return 0;  /* screen size unknown — no connection yet */
     return x >= 0 && y >= 0 &&
            (unsigned)x + w <= (unsigned)src_scr_w &&
            (unsigned)y + h <= (unsigned)src_scr_h;
@@ -429,7 +438,11 @@ static xcb_connection_t *ensure_src_c(void) {
         if (src_c && !xcb_connection_has_error(src_c)) {
             xcb_screen_iterator_t it =
                 xcb_setup_roots_iterator(xcb_get_setup(src_c));
-            if (it.rem) src_root = it.data->root;
+            if (it.rem) {
+                src_root = it.data->root;
+                src_scr_w = it.data->width_in_pixels;
+                src_scr_h = it.data->height_in_pixels;
+            }
             plog("streamproxy: xcb src %s opened\n", n);
         } else {
             if (src_c) xcb_disconnect(src_c);
@@ -557,7 +570,12 @@ xcb_get_image_cookie_t xcb_get_image(xcb_connection_t *c, uint8_t format,
          (drawable == conn_root(c)) ? "(root)" : "(window)");
     xcb_get_image_cookie_t cookie =
         real_xcb_get_image(c, format, drawable, x, y, width, height, plane_mask);
-    if (ensure_src_c() && c != src_c && drawable == conn_root(c)) {
+    if (ensure_src_c() && c != src_c && drawable == conn_root(c) &&
+        region_fits(x, y, width, height)) {
+        /* Same protocol as the Xlib paths: report the capture region (the
+         * plugin parks the gst window there) and keep the heartbeat fresh
+         * so a live xcb-based share is never torn down mid-stream. */
+        report_region(x, y, width, height);
         unsigned int slot = cookie.sequence % PROXY_MAP_SIZE;
         for (unsigned int i = 0; i < PROXY_MAP_SIZE; i++) {
             unsigned int s = (slot + i) % PROXY_MAP_SIZE;
