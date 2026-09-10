@@ -60,7 +60,7 @@ runner Bottles.
 | `ZCALL_WINEPREFIX` | Prefix riêng của app (mặc định `<userData>/zcall-wine`) |
 | `ZCALL_DISABLE` | Set giá trị bất kỳ để tắt tính năng gọi |
 | `ZCALL_WINE_DOWNLOAD_URL` | Ghi đè URL tải wine portable |
-| `ZCALL_CAMERA_LOCK_FMT` | `1` = khóa YUYV 640x480@30 (mặc định cho classic); `best` = tự dò format tốt nhất (HD cho máy mạnh) |
+| `ZCALL_CAMERA_LOCK_FMT` | `1` = khóa YUYV 640x480@30 (mặc định cho mọi wine — chất lượng cố định, không nhảy); `best` = tự dò format tốt nhất (HD cho máy mạnh) |
 | `ZCALL_CAMERA_HIDE` | Ẩn camera (gọi video một chiều, không crash) |
 
 ## Thư viện 32-bit cho wine classic

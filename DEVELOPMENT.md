@@ -17,8 +17,9 @@ reimplementation, see [nativelibs/README.md](./nativelibs/README.md).
   (`pipebridge.exe`), 32-bit + 64-bit X11 dev libs (the `streamproxy`
   capture shims), `libpipewire-0.3-0` (bundled-GStreamer self-containment
   checks) — see the apt command below
-- `rpm` (`rpmbuild`) for the .rpm target — electron-builder's fpm needs it
-  on the build machine even on Debian/Ubuntu hosts
+- `rpm` (`rpmbuild`) for the .rpm target and `libarchive-tools` (`bsdtar`)
+  for the pacman target — electron-builder's fpm needs both on the build
+  machine even on Debian/Ubuntu hosts
 - `docker` (optional, for the self-contained 64-bit GStreamer bundle —
   without it the Full AppImage falls back to the host's GStreamer at runtime)
 
@@ -28,7 +29,7 @@ On Debian/Ubuntu:
 sudo dpkg --add-architecture i386
 sudo apt-get update && sudo apt-get install -y p7zip-full build-essential libssl-dev liblzma-dev \
   gcc-mingw-w64-i686 gcc-multilib libc6-dev-i386 libx11-dev libxcb1-dev libxext-dev \
-  libx11-dev:i386 libxcb1-dev:i386 libxext-dev:i386 libpipewire-0.3-0 rpm
+  libx11-dev:i386 libxcb1-dev:i386 libxext-dev:i386 libpipewire-0.3-0 rpm libarchive-tools
 ```
 
 ## Quick Start

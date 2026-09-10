@@ -96,7 +96,7 @@ On Debian/Ubuntu:
 sudo dpkg --add-architecture i386
 sudo apt-get update && sudo apt-get install -y p7zip-full build-essential libssl-dev liblzma-dev \
   gcc-mingw-w64-i686 gcc-multilib libc6-dev-i386 libx11-dev libxcb1-dev libxext-dev \
-  libx11-dev:i386 libxcb1-dev:i386 libxext-dev:i386 libpipewire-0.3-0 rpm
+  libx11-dev:i386 libxcb1-dev:i386 libxext-dev:i386 libpipewire-0.3-0 rpm libarchive-tools
 ```
 
 (`gcc-mingw-w64-i686` builds `pipebridge.exe`; the multilib/i386 X11 dev

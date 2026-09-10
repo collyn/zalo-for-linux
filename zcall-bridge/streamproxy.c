@@ -84,17 +84,15 @@ static int camera_force_yuyv(void) {
 }
 
 /* ZCALL_CAMERA_LOCK_FMT=1 — present ONE fixed format (YUYV 640x480) on every
- * V4L2 query: S_FMT/TRY_FMT/G_FMT replies and ENUM_FMT/ENUM_FRAMESIZES are
- * all rewritten so no layer (winegstreamer, libv4l, Qt) can disagree about
- * what the stream carries. Any mismatch between layers is exactly what makes
- * the frame pipeline read garbage (varying fault address across runs).
+ * V4L2 query AND set the driver to exactly that at open, so no layer
+ * (winegstreamer, libv4l, Qt) can disagree about what the stream carries.
+ * Any mismatch between layers makes the frame pipeline read garbage and
+ * renegotiate endlessly — the "quality keeps changing" symptom.
  * ZCALL_CAMERA_LOCK_FMT=best — same, but the locked format is the BEST one
  * the camera natively supports: requires >=30fps, prefers MJPG (USB
  * bandwidth), largest resolution wins. On the typical UVC cam this picks
  * MJPG 1280x720@30 — HD without the 720p@10fps lag the default YUYV
  * negotiation lands on. */
-static struct { uint32_t fourcc; int w, h; } chosen_fmt = { V4L2_PIX_FMT_YUYV, 640, 480 };
-
 static int lock_fmt_mode(void) {
     static int v = -1;
     if (v < 0) {
@@ -104,7 +102,74 @@ static int lock_fmt_mode(void) {
     return v;
 }
 
-static void probe_best_fmt(int fd) {
+/* Per-camera-fd state. lock_valid=1: every fmt query on this fd is answered
+ * with lock_fourcc/lock_w/lock_h AND the driver really is set to that format
+ * (lie == truth). lock_valid=0: passthrough — the device is alive but does
+ * not support the locked format (typical IR/secondary cams that only do
+ * Y8/Y16): the app sees its real caps instead of a refused open, so wine's
+ * device list stays stable and ZaloCall stops re-enumerating/re-opening the
+ * cameras every second (the cycle that made the video jumpy). */
+static struct cam_fd {
+    int fd;
+    char path[64];
+    int lock_valid;
+    uint32_t lock_fourcc;
+    int lock_w, lock_h;
+} cam_fds[32];
+static int cam_fd_count = 0;
+
+static void cam_fd_add(int fd, const char *path) {
+    if (fd >= 0 && cam_fd_count < 32) {
+        cam_fds[cam_fd_count].fd = fd;
+        strncpy(cam_fds[cam_fd_count].path, path ? path : "?", 63);
+        cam_fds[cam_fd_count].path[63] = 0;
+        cam_fds[cam_fd_count].lock_valid = 0;
+        cam_fd_count++;
+    }
+}
+
+static int cam_fd_find(int fd) {
+    for (int i = 0; i < cam_fd_count; i++)
+        if (cam_fds[i].fd == fd) return i;
+    return -1;
+}
+
+static void cam_fd_remove(int fd) {
+    int i = cam_fd_find(fd);
+    if (i >= 0) { cam_fds[i] = cam_fds[cam_fd_count - 1]; cam_fd_count--; }
+}
+
+static void cam_fd_lock(int fd, uint32_t fourcc, int w, int h) {
+    int i = cam_fd_find(fd);
+    if (i >= 0) {
+        cam_fds[i].lock_valid = 1;
+        cam_fds[i].lock_fourcc = fourcc;
+        cam_fds[i].lock_w = w;
+        cam_fds[i].lock_h = h;
+    }
+}
+
+/* Best-format probe, cached per device path. The result MUST be stable
+ * across opens of the same device: ZaloCall closes and re-opens the camera
+ * constantly, and a re-probe landing on a different format each time is
+ * exactly a visible "quality jump". Per-path also stops a second camera
+ * from inheriting the first camera's locked format. */
+static struct probe_cache {
+    char path[64];
+    int valid;
+    uint32_t fourcc;
+    int w, h;
+} probe_cache[8];
+
+static void probe_best_fmt(int fd, const char *path, uint32_t *fourcc, int *w, int *h) {
+    *fourcc = 0; *w = 0; *h = 0;
+    for (int i = 0; i < 8; i++)
+        if (probe_cache[i].valid && strcmp(probe_cache[i].path, path) == 0) {
+            *fourcc = probe_cache[i].fourcc;
+            *w = probe_cache[i].w;
+            *h = probe_cache[i].h;
+            return;
+        }
     struct { uint32_t fourcc; int w, h; int score; } best = {0, 0, 0, 0};
     struct v4l2_fmtdesc fd_;
     memset(&fd_, 0, sizeof(fd_));
@@ -135,20 +200,29 @@ static void probe_best_fmt(int fd) {
             }
         }
     }
-    if (best.score > 0) {
-        chosen_fmt.fourcc = best.fourcc;
-        chosen_fmt.w = best.w;
-        chosen_fmt.h = best.h;
-    }
+    if (best.score > 0) { *fourcc = best.fourcc; *w = best.w; *h = best.h; }
+    /* Cache even a miss — re-probing a wedged device wastes time. */
+    for (int i = 0; i < 8; i++)
+        if (!probe_cache[i].valid) {
+            strncpy(probe_cache[i].path, path, 63);
+            probe_cache[i].path[63] = 0;
+            probe_cache[i].valid = 1;
+            probe_cache[i].fourcc = *fourcc;
+            probe_cache[i].w = *w;
+            probe_cache[i].h = *h;
+            break;
+        }
 }
 
-static void lie_fmt(struct v4l2_format *f) {
-    f->fmt.pix.width = chosen_fmt.w;
-    f->fmt.pix.height = chosen_fmt.h;
-    f->fmt.pix.pixelformat = chosen_fmt.fourcc;
+static void lie_fmt(struct v4l2_format *f, const struct cam_fd *c) {
+    f->fmt.pix.width = c->lock_w;
+    f->fmt.pix.height = c->lock_h;
+    f->fmt.pix.pixelformat = c->lock_fourcc;
     f->fmt.pix.field = V4L2_FIELD_NONE;
-    /* bytesperline/sizeimage stay as the driver's real reply — for MJPG the
-     * actual frame size varies and only the driver knows the right bound. */
+    /* bytesperline/sizeimage stay as the driver's real reply. The driver IS
+     * on the locked format (set at open, every S_FMT is rewritten to it), so
+     * its reply is the truth — including alignment padding and, for MJPG,
+     * the only right sizeimage bound. */
 }
 
 static int is_video_path(const char *path) {
@@ -182,30 +256,8 @@ static int is_loopback_path(const char *path) {
     return lp && path && strcmp(path, lp) == 0;
 }
 
-/* Track camera fds (open -> close) so the ioctl tracer only logs V4L2 fds
- * and the close wrapper does not ioctl-probe unrelated fds. */
-static struct { int fd; char path[64]; } cam_fds[32];
-static int cam_fd_count = 0;
-
-static void cam_fd_add(int fd, const char *path) {
-    if (fd >= 0 && cam_fd_count < 32) {
-        cam_fds[cam_fd_count].fd = fd;
-        strncpy(cam_fds[cam_fd_count].path, path ? path : "?", 63);
-        cam_fds[cam_fd_count].path[63] = 0;
-        cam_fd_count++;
-    }
-}
-
-static int cam_fd_find(int fd) {
-    for (int i = 0; i < cam_fd_count; i++)
-        if (cam_fds[i].fd == fd) return i;
-    return -1;
-}
-
-static void cam_fd_remove(int fd) {
-    int i = cam_fd_find(fd);
-    if (i >= 0) { cam_fds[i] = cam_fds[cam_fd_count - 1]; cam_fd_count--; }
-}
+/* (cam_fd tracking lives in the camera-format section above: the ioctl
+ * tracer and the close-time kick both key off it.) */
 
 static void fourcc_str(uint32_t f, char out[5]) {
     out[0] = (char)(f & 0xff); out[1] = (char)((f >> 8) & 0xff);
@@ -255,37 +307,81 @@ static void vlog(const char *fmt, ...) {
  * v4l2-ctl only fixes the FIRST call of the session. */
 typedef int (*open_fn)(const char *, int, ...);
 
-/* Try MJPG 640x480 first; fall back to YUYV 640x480 (IR/secondary devices
- * usually only do raw formats). ZCALL_CAMERA_FORCE_YUYV=1 inverts the
- * preference. Returns the pixelformat actually set. */
-static uint32_t set_camera_fmt(int fd) {
+/* Open-time negotiation.
+ * Lock mode: set the DRIVER to the one locked format and record it on the
+ * fd (returns 1). A device that rejects the locked format but still accepts
+ * its own native format is alive and just format-poor (IR cams) — return 2
+ * (passthrough: no lies) instead of refusing it, so wine's device
+ * enumeration stays stable and the app stops re-opening cameras endlessly.
+ * A device that rejects even its native format is WEDGED (stuck
+ * alt-setting) — return 0, the caller runs the mini-stream recovery.
+ * Unlocked mode keeps the legacy MJPG-first (or FORCE_YUYV) starting format
+ * (returns 2 — there are no lies without a lock). */
+static int negotiate_camera(int fd, const char *path) {
     struct v4l2_format fmt;
     memset(&fmt, 0, sizeof(fmt));
     fmt.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
     if (ioctl(fd, VIDIOC_G_FMT, &fmt) < 0) return 0;
-    uint32_t first, second;
-    if (lock_fmt_mode() == 2) {
-        probe_best_fmt(fd);
-        fmt.fmt.pix.width = chosen_fmt.w;
-        fmt.fmt.pix.height = chosen_fmt.h;
-        first = chosen_fmt.fourcc;
-        second = (first == V4L2_PIX_FMT_YUYV) ? V4L2_PIX_FMT_MJPEG : V4L2_PIX_FMT_YUYV;
-    } else {
+
+    if (lock_fmt_mode() == 0) {
+        uint32_t first = camera_force_yuyv() ? V4L2_PIX_FMT_YUYV : V4L2_PIX_FMT_MJPEG;
+        uint32_t second = camera_force_yuyv() ? V4L2_PIX_FMT_MJPEG : V4L2_PIX_FMT_YUYV;
         fmt.fmt.pix.width = 640;
         fmt.fmt.pix.height = 480;
-        first = camera_force_yuyv() ? V4L2_PIX_FMT_YUYV : V4L2_PIX_FMT_MJPEG;
-        second = camera_force_yuyv() ? V4L2_PIX_FMT_MJPEG : V4L2_PIX_FMT_YUYV;
+        fmt.fmt.pix.pixelformat = first;
+        if (ioctl(fd, VIDIOC_S_FMT, &fmt) == 0 && fmt.fmt.pix.pixelformat == first) {
+            plog("streamproxy: camera %s -> %s 640x480\n", path,
+                 first == V4L2_PIX_FMT_MJPEG ? "MJPG" : "YUYV");
+            return 2;
+        }
+        fmt.fmt.pix.pixelformat = second;
+        if (ioctl(fd, VIDIOC_S_FMT, &fmt) == 0 && fmt.fmt.pix.pixelformat == second) {
+            plog("streamproxy: camera %s -> %s 640x480\n", path,
+                 second == V4L2_PIX_FMT_MJPEG ? "MJPG" : "YUYV");
+            return 2;
+        }
+        return 0;
     }
-    fmt.fmt.pix.pixelformat = first;
-    if (ioctl(fd, VIDIOC_S_FMT, &fmt) == 0 && fmt.fmt.pix.pixelformat == first)
-        return first;
-    fmt.fmt.pix.pixelformat = second;
-    if (ioctl(fd, VIDIOC_S_FMT, &fmt) == 0 && fmt.fmt.pix.pixelformat == second)
-        return second;
+
+    uint32_t target_fourcc;
+    int target_w, target_h;
+    if (lock_fmt_mode() == 2) {
+        probe_best_fmt(fd, path, &target_fourcc, &target_w, &target_h);
+        if (!target_fourcc) { target_fourcc = V4L2_PIX_FMT_YUYV; target_w = 640; target_h = 480; }
+    } else {
+        target_fourcc = V4L2_PIX_FMT_YUYV;
+        target_w = 640;
+        target_h = 480;
+    }
+    fmt.fmt.pix.width = target_w;
+    fmt.fmt.pix.height = target_h;
+    fmt.fmt.pix.pixelformat = target_fourcc;
+    if (ioctl(fd, VIDIOC_S_FMT, &fmt) == 0 && fmt.fmt.pix.pixelformat == target_fourcc) {
+        /* Lock to what the driver REALLY granted (it may clamp the size) —
+         * the lie must always equal the truth. */
+        cam_fd_lock(fd, fmt.fmt.pix.pixelformat, (int)fmt.fmt.pix.width, (int)fmt.fmt.pix.height);
+        char c[5];
+        fourcc_str(fmt.fmt.pix.pixelformat, c);
+        plog("streamproxy: camera %s LOCKED %s %dx%d\n", path, c,
+             fmt.fmt.pix.width, fmt.fmt.pix.height);
+        return 1;
+    }
+    /* Locked format rejected. Still takes its own native format? Healthy
+     * but format-poor — let the app see the real device. */
+    if (ioctl(fd, VIDIOC_G_FMT, &fmt) == 0) {
+        struct v4l2_format native = fmt;
+        if (ioctl(fd, VIDIOC_S_FMT, &native) == 0) {
+            char c[5];
+            fourcc_str(fmt.fmt.pix.pixelformat, c);
+            plog("streamproxy: camera %s passthrough (no locked fmt, native %s %dx%d)\n",
+                 path, c, fmt.fmt.pix.width, fmt.fmt.pix.height);
+            return 2;
+        }
+    }
     return 0;
 }
 
-static int recover_camera(int fd);
+static int recover_camera(int fd, uint32_t fourcc, int w, int h);
 static int (*real_close_fn)(int) = NULL;
 
 static int wrap_open(const char *path, int flags, mode_t mode, const char *sym) {
@@ -311,29 +407,33 @@ static int wrap_open(const char *path, int flags, mode_t mode, const char *sym) 
     }
     int fd = fn(path, flags, mode);
     if (fd >= 0 && is_video_path(path) && !is_loopback_path(path)) {
+        cam_fd_add(fd, path);
         if (camera_passthrough()) {
             if (camera_debug())
                 plog("streamproxy: camera %s passthrough open (no fmt force)\n", path);
         } else {
-            uint32_t got = set_camera_fmt(fd);
-            if (got == V4L2_PIX_FMT_MJPEG)
-                plog("streamproxy: camera %s -> MJPG %dx%d\n", path, chosen_fmt.w, chosen_fmt.h);
-            else if (got == V4L2_PIX_FMT_YUYV)
-                plog("streamproxy: camera %s -> YUYV %dx%d (%s)\n", path, chosen_fmt.w, chosen_fmt.h,
-                     camera_force_yuyv() ? "forced" : "no MJPG");
-            else {
-                /* Neither format accepted. Either a format-poor device (IR
-                 * camera) or a WEDGED one left half-streaming by the previous
-                 * session — try a mini-stream recovery on a fresh fd. */
+            int res = negotiate_camera(fd, path);
+            if (res == 0) {
+                /* Neither the locked format nor the device's own native
+                 * format accepted — a WEDGED device left half-streaming by
+                 * the previous session. Try a mini-stream recovery on a
+                 * fresh fd, then re-negotiate once. */
                 static open_fn real_open_r = NULL;
                 if (!real_open_r) real_open_r = (open_fn)dlsym(RTLD_NEXT, "open");
                 int r = real_open_r(path, O_RDWR | O_NONBLOCK, 0);
                 if (r >= 0) {
-                    recover_camera(r);
+                    uint32_t rf = V4L2_PIX_FMT_MJPEG;
+                    int rw = 640, rh = 480;
+                    if (lock_fmt_mode() == 1) rf = V4L2_PIX_FMT_YUYV;
+                    else if (lock_fmt_mode() == 2) {
+                        probe_best_fmt(r, path, &rf, &rw, &rh);
+                        if (!rf) { rf = V4L2_PIX_FMT_YUYV; rw = 640; rh = 480; }
+                    }
+                    recover_camera(r, rf, rw, rh);
                     real_close_fn(r);
-                    got = set_camera_fmt(fd);
+                    res = negotiate_camera(fd, path);
                 }
-                if (got == V4L2_PIX_FMT_MJPEG || got == V4L2_PIX_FMT_YUYV) {
+                if (res != 0) {
                     plog("streamproxy: camera %s recovered by mini-stream -> fmt OK\n", path);
                 } else if (getenv("ZCALL_CAMERA_KEEP_WEDGED")) {
                     /* Debug lever: let the app see the half-dead device (old
@@ -344,7 +444,9 @@ static int wrap_open(const char *path, int flags, mode_t mode, const char *sym) 
                      * to voice-only instead of crashing on a half-dead device.
                      * The user can then replug / rmmod at leisure. */
                     plog("streamproxy: camera %s: WEDGED — open refused (voice-only fallback)\n", path);
+                    cam_fd_remove(fd);
                     real_close_fn(fd);
+                    errno = ENODEV;
                     return -1;
                 }
             }
@@ -369,7 +471,7 @@ int open(const char *path, int flags, ...) {
         return real_open_o(path, flags, mode);
     }
     int fd = wrap_open(path, flags, mode, "open");
-    if (fd >= 0 && is_video_path(path)) { cam_open_count++; cam_fd_add(fd, path); }
+    if (fd >= 0 && is_video_path(path)) cam_open_count++;
     return fd;
 }
 
@@ -387,7 +489,7 @@ int open64(const char *path, int flags, ...) {
         return real_open64_o(path, flags, mode);
     }
     int fd = wrap_open(path, flags, mode, "open64");
-    if (fd >= 0 && is_video_path(path)) { cam_open_count++; cam_fd_add(fd, path); }
+    if (fd >= 0 && is_video_path(path)) cam_open_count++;
     return fd;
 }
 
@@ -397,25 +499,29 @@ int open64(const char *path, int flags, ...) {
 /* wine's winegstreamer stops the stream without fully resetting the
  * device on some cameras (alt-setting stuck): the NEXT open gets a
  * half-dead device and ZaloCall crashes on the garbage it reads (the
- * Mint "first call works, second call crashes" bug). When the LAST fd on
- * a /dev/video* device closes, re-open it briefly, send STREAMOFF and
- * re-apply the format — a userspace "kick" that normalizes the driver. */
+ * Mint "first call works, second call crashes" bug). The kick normalizes
+ * the driver when the LAST camera fd closes.
+ * BUT it only applies to unlocked (legacy) mode: under LOCK mode the next
+ * open re-applies the locked format by itself, and kicking between
+ * ZaloCall's constant open/close cycles only re-creates the stuck-alt-
+ * setting wedge it was meant to cure (observed on the Mint laptop:
+ * repeated kicks ended with /dev/video0 WEDGED and the camera gone). */
 
 /* Full mini-stream cycle: format -> 2 mmap buffers -> STREAMON ->
  * STREAMOFF -> release. This is the sequence uvcvideo needs to return the
  * USB alt-setting to idle; a bare STREAMOFF was not enough on some cameras
  * (the Mint wedge: next open's S_FMT fails and ZaloCall crashes on the
  * half-dead device). Returns 0 when the device answers all ioctls cleanly. */
-static int recover_camera(int fd) {
+static int recover_camera(int fd, uint32_t fourcc, int w, int h) {
     struct v4l2_format fmt;
     struct v4l2_requestbuffers req;
     enum v4l2_buf_type t = V4L2_BUF_TYPE_VIDEO_CAPTURE;
     memset(&fmt, 0, sizeof(fmt));
     fmt.type = t;
     if (ioctl(fd, VIDIOC_G_FMT, &fmt) < 0) return -1;
-    fmt.fmt.pix.width = 640;
-    fmt.fmt.pix.height = 480;
-    fmt.fmt.pix.pixelformat = V4L2_PIX_FMT_MJPEG;
+    fmt.fmt.pix.width = w;
+    fmt.fmt.pix.height = h;
+    fmt.fmt.pix.pixelformat = fourcc;
     if (ioctl(fd, VIDIOC_S_FMT, &fmt) < 0) return -1;
     memset(&req, 0, sizeof(req));
     req.count = 2;
@@ -436,7 +542,7 @@ static void kick_camera(const char *path) {
     if (k < 0) return;
     enum v4l2_buf_type t = V4L2_BUF_TYPE_VIDEO_CAPTURE;
     ioctl(k, VIDIOC_STREAMOFF, &t);
-    recover_camera(k);
+    recover_camera(k, camera_force_yuyv() ? V4L2_PIX_FMT_YUYV : V4L2_PIX_FMT_MJPEG, 640, 480);
     real_close_fn(k);
     plog("streamproxy: camera %s kicked (mini-stream cycle) after last close\n", path);
 }
@@ -444,16 +550,24 @@ static void kick_camera(const char *path) {
 int close(int fd) {
     if (!real_close_fn) real_close_fn = (int (*)(int))dlsym(RTLD_NEXT, "close");
     if (disabled()) return real_close_fn(fd);
-    int is_cam = cam_fd_find(fd) >= 0;
+    int i = cam_fd_find(fd);
+    char path[64];
+    path[0] = 0;
+    if (i >= 0) { strncpy(path, cam_fds[i].path, 63); path[63] = 0; }
     int ret = real_close_fn(fd);
-    if (is_cam) {
+    if (i >= 0) {
         cam_fd_remove(fd);
         if (cam_open_count > 0) {
             cam_open_count--;
-            if (cam_open_count == 0 && !camera_passthrough() && !camera_loopback()) {
-                /* Last camera fd in the process closed — normalize the device.
-                 * Best-effort on video0 (the real webcam). */
-                kick_camera("/dev/video0");
+            /* Kick only in unlocked legacy mode (see the kick comment above)
+             * and at most once per 30s: the app re-opens cameras constantly,
+             * and a kick per close-cycle is what wedges the device. */
+            static time_t last_kick = 0;
+            time_t now = time(NULL);
+            if (cam_open_count == 0 && !camera_passthrough() && !camera_loopback() &&
+                !lock_fmt_mode() && path[0] && now - last_kick >= 30) {
+                last_kick = now;
+                kick_camera(path);
             }
         }
     }
@@ -478,28 +592,30 @@ int ioctl(int fd, unsigned long request, ...) {
     va_end(ap);
     int i = (camera_debug() || camera_force_yuyv() || lock_fmt_mode()) ? cam_fd_find(fd) : -1;
     const char *p = (i >= 0) ? cam_fds[i].path : NULL;
-    /* LOCK mode: the device enumerates exactly ONE format and ONE size, so
-     * no layer can disagree about what the stream carries. */
-    if (p && lock_fmt_mode() && request == VIDIOC_ENUM_FMT) {
+    int locked = (i >= 0) && cam_fds[i].lock_valid;
+    /* LOCK mode (fd locked): the device enumerates exactly ONE format and
+     * ONE size, so no layer can disagree about what the stream carries.
+     * Passthrough fds (healthy but format-poor) answer truthfully. */
+    if (p && locked && request == VIDIOC_ENUM_FMT) {
         struct v4l2_fmtdesc *d = (struct v4l2_fmtdesc *)arg;
         if (d && d->index == 0) {
             char c[5];
             d->type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
             d->flags = 0;
-            d->pixelformat = chosen_fmt.fourcc;
-            fourcc_str(chosen_fmt.fourcc, c);
-            strcpy((char *)d->description, chosen_fmt.fourcc == V4L2_PIX_FMT_MJPEG ? "Motion-JPEG" : c);
+            d->pixelformat = cam_fds[i].lock_fourcc;
+            fourcc_str(cam_fds[i].lock_fourcc, c);
+            strcpy((char *)d->description, cam_fds[i].lock_fourcc == V4L2_PIX_FMT_MJPEG ? "Motion-JPEG" : c);
             return 0;
         }
         errno = EINVAL;
         return -1;
     }
-    if (p && lock_fmt_mode() && request == VIDIOC_ENUM_FRAMESIZES) {
+    if (p && locked && request == VIDIOC_ENUM_FRAMESIZES) {
         struct v4l2_frmsizeenum *e = (struct v4l2_frmsizeenum *)arg;
         if (e && e->index == 0) {
             e->type = V4L2_FRMSIZE_TYPE_DISCRETE;
-            e->discrete.width = chosen_fmt.w;
-            e->discrete.height = chosen_fmt.h;
+            e->discrete.width = cam_fds[i].lock_w;
+            e->discrete.height = cam_fds[i].lock_h;
             return 0;
         }
         errno = EINVAL;
@@ -518,14 +634,14 @@ int ioctl(int fd, unsigned long request, ...) {
                 f.fmt.pix.height = 480;
                 plog("streamproxy: camera %s S_FMT MJPG -> forced YUYV 640x480\n", p);
             }
-            if (lock_fmt_mode()) lie_fmt(&f);
+            if (locked) lie_fmt(&f, &cam_fds[i]);
             memcpy(arg, &f, sizeof(f));
             char c[5];
             fourcc_str(f.fmt.pix.pixelformat, c);
             plog("streamproxy: camera %s %s req %ux%u %s%s\n", p,
                  request == VIDIOC_S_FMT ? "S_FMT" : "TRY_FMT",
                  f.fmt.pix.width, f.fmt.pix.height, c,
-                 lock_fmt_mode() ? " (locked)" : "");
+                 locked ? " (locked)" : "");
         }
     }
     int ret = real_ioctl_fn(fd, request, arg);
@@ -533,7 +649,7 @@ int ioctl(int fd, unsigned long request, ...) {
         if (request == VIDIOC_S_FMT || request == VIDIOC_TRY_FMT || request == VIDIOC_G_FMT) {
             struct v4l2_format f; char c[5];
             if (arg && ret == 0) { memcpy(&f, arg, sizeof(f));
-                if (lock_fmt_mode()) { lie_fmt(&f); memcpy(arg, &f, sizeof(f)); }
+                if (locked) { lie_fmt(&f, &cam_fds[i]); memcpy(arg, &f, sizeof(f)); }
                 fourcc_str(f.fmt.pix.pixelformat, c);
                 plog("streamproxy: camera %s fmt -> %ux%u %s (ok)\n", p,
                      f.fmt.pix.width, f.fmt.pix.height, c); }
