@@ -51,7 +51,8 @@ const os = require('os');
 const path = require('path');
 const https = require('https');
 
-// Recommended build: 11.17 classic amd64 (~96MB / ~850MB extracted). Video
+// Recommended build: 11.17 classic amd64 (~96MB / ~652MB extracted after the
+// dev-kit prune — headers, import libs, winegcc/widl toolchain removed). Video
 // calls verified working on it (Mint 2026-09-10). The wow64 build crashes
 // ZaloCall's DirectShow camera path on some hosts — wine qcap WoW64
 // media-type marshaling bug (upstream MR10269/10377, unmerged as of 11.17;
@@ -72,7 +73,7 @@ const GST_DIRNAME = 'zcall-gst-runtime';
 const GST_TARBALL_NAME = 'zcall-gst-download.tar.xz';
 const GST_RUNTIME_MARKER = path.join('usr', 'lib', 'x86_64-linux-gnu', 'libgstreamer-1.0.so.0');
 // Ask-window/progress text; measured from a real CI build (dist asset).
-const GST_DOWNLOAD_MB = 96;
+const GST_DOWNLOAD_MB = 105;
 
 let dialogModule = null;
 let BrowserWindowModule = null;
@@ -420,6 +421,32 @@ async function installDownloadedWine(userDataDir, onProgress) {
 
   const wine = path.join(runtimeDir, 'bin', 'wine');
   if (!fs.existsSync(wine)) throw new Error('wine binary not found after extract');
+  // Prune the kron4ek tree to runtime-only content (mirror of pruneWineTree
+  // in scripts/build.js): headers, import libs, .def/.c sources and the
+  // winegcc/widl/winemaker toolchain are ~200MB of disk the call engine
+  // never touches — only bin/wine, bin/wineserver and bin/wineboot spawn.
+  try {
+    fs.rmSync(path.join(runtimeDir, 'include'), { recursive: true, force: true });
+    for (const sub of ['lib', 'lib64']) {
+      const dir = path.join(runtimeDir, sub, 'wine');
+      if (!fs.existsSync(dir)) continue;
+      (function walk(d) {
+        for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+          const p = path.join(d, e.name);
+          if (e.isDirectory()) walk(p);
+          else if (/\.(a|def|c)$/.test(e.name)) fs.rmSync(p, { force: true });
+        }
+      })(dir);
+    }
+    const keepBin = new Set(['wine', 'wineserver', 'wineboot']);
+    const binDir = path.join(runtimeDir, 'bin');
+    for (const e of fs.readdirSync(binDir, { withFileTypes: true })) {
+      if (!keepBin.has(e.name)) fs.rmSync(path.join(binDir, e.name), { recursive: true, force: true });
+    }
+    debugLog('wine runtime pruned to runtime-only content');
+  } catch (e) {
+    debugLog('wine runtime prune failed (non-fatal): ' + e.message);
+  }
   // Variant marker: the runtime dir must match the wine the app is configured
   // for. findDownloadedWine() discards a mismatch (classic vs wow64) so a
   // URL change can never silently keep serving the old variant.
@@ -776,6 +803,29 @@ async function promptAndInstall(userDataDir, failedWine) {
 // Public API
 // ---------------------------------------------------------------------------
 
+/**
+ * Mirror wine's own prefix-update no-op check: wineboot compares the
+ * prefix's .update-timestamp with the mtime of share/wine/wine.inf and
+ * skips the update pass when they match (the stamp stores wine.inf's mtime
+ * in seconds; "disable" opts out entirely). Returns true when an update
+ * would actually run, or when the stamp is unreadable (let wine decide).
+ * Needed because `wineboot -u` FORCES the update regardless of the stamp —
+ * running it unconditionally re-shows wine's "The wine configuration in ...
+ * is being updated, please wait" dialog on every launch.
+ */
+function winePrefixNeedsUpdate(wineBin, prefix) {
+  try {
+    const wineTree = path.resolve(path.dirname(wineBin), '..');
+    const inf = path.join(wineTree, 'share', 'wine', 'wine.inf');
+    const stamp = fs.readFileSync(path.join(prefix, '.update-timestamp'), 'utf8').trim();
+    if (stamp === 'disable') return false;
+    const infMtime = Math.floor(fs.statSync(inf).mtimeMs / 1000);
+    return stamp !== String(infMtime);
+  } catch (e) {
+    return true; // no stamp / no wine.inf — let wineboot sort it out
+  }
+}
+
 function launch({ userDataDir }) {
   if (process.env.ZCALL_DISABLE) return false;
 
@@ -887,15 +937,19 @@ function launch({ userDataDir }) {
   // for pure-wow64 wines).
   applyWineEnv(wine, prefix);
 
-  // Complete any pending prefix update SYNCHRONOUSLY. Wine normally runs the
-  // update pass lazily on wineserver start — if the session ends before it
-  // finishes (or the user alternates between wine builds, e.g. bundled
-  // classic vs a previously-downloaded wow64), the stamp never persists and the
-  // "wine: configuration in ... has been updated" pass re-runs on EVERY
-  // launch. wineboot -u waits for completion (~1s when nothing is pending).
+  // Complete any pending prefix update SYNCHRONOUSLY — but ONLY when one is
+  // actually pending. `wineboot -u` FORCES the prefix update pass regardless
+  // of state (wineboot.c: `if (init || update) update_wineprefix( update )`
+  // passes force through), re-running rundll32 wine.inf and showing wine's
+  // "The wine configuration in ... is being updated, please wait" dialog on
+  // EVERY launch. Mirror wine's own no-op check (.update-timestamp vs
+  // wine.inf mtime) and only then run wineboot -u, which waits for
+  // completion and persists the stamp — so a lazily-aborted update from a
+  // previous session (e.g. the user alternated wine builds) settles here
+  // instead of re-running mid-call.
   // ZCALL_SKIP_WINEBOOT=1 (debug): bisect lever — the old releases never
   // touched the real prefix at launch.
-  if (process.env.ZCALL_SKIP_WINEBOOT !== '1') {
+  if (process.env.ZCALL_SKIP_WINEBOOT !== '1' && winePrefixNeedsUpdate(wine, prefix)) {
     try {
       spawnSync(wine, ['wineboot', '-u'], {
         env: Object.assign({}, process.env, { WINEPREFIX: prefix, WINEDEBUG: '-all' }),
@@ -1051,7 +1105,7 @@ function openSetupDialog({ userDataDir }) {
       <button id="setpath">Dùng đường dẫn này</button>
     </div>
     <button id="browse">Chọn file wine khác…</button>
-    <button id="download">Tải Wine + GStreamer về (~250MB)</button>
+    <button id="download">Tải Wine + GStreamer về (~${96 + GST_DOWNLOAD_MB}MB)</button>
     <button id="clear">Bỏ lựa chọn wine đã lưu</button>
     <button id="remove">Xóa Wine + GStreamer đã tải về khỏi máy</button>
     <button id="close">Đóng</button>

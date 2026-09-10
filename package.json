@@ -48,7 +48,12 @@
       "main.js",
       "package.json",
       "plugins/**/*",
+      "!plugins/zadark/**",
       "assets/**/*"
+    ],
+    "electronLanguages": [
+      "vi",
+      "en-US"
     ],
     "extraFiles": [
       {

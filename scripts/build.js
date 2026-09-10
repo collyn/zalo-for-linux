@@ -182,6 +182,35 @@ const PW_PACKAGES = [
   'libspa-0.2-bluetooth',
 ];
 
+/**
+ * Trim a kron4ek wine tree to runtime-only content (~200MB of the ~850MB
+ * extract): the tarball ships wine's full development kit — headers
+ * (include/), import libs, .def/.c sources under lib/wine and the
+ * winegcc/widl/winemaker toolchain in bin/. The call engine spawns only
+ * bin/wine, bin/wineserver and bin/wineboot, and the wine loader never
+ * reads the dev files. Mirrored in plugins/zcall-bridge (standard-variant
+ * first-run install) so both paths get the same tree.
+ */
+function pruneWineTree(wineRoot) {
+  fs.rmSync(path.join(wineRoot, 'include'), { recursive: true, force: true });
+  for (const sub of ['lib', 'lib64']) {
+    const dir = path.join(wineRoot, sub, 'wine');
+    if (!fs.existsSync(dir)) continue;
+    (function walk(d) {
+      for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+        const p = path.join(d, e.name);
+        if (e.isDirectory()) walk(p);
+        else if (/\.(a|def|c)$/.test(e.name)) fs.rmSync(p, { force: true });
+      }
+    })(dir);
+  }
+  const keepBin = new Set(['wine', 'wineserver', 'wineboot']);
+  const binDir = path.join(wineRoot, 'bin');
+  for (const e of fs.readdirSync(binDir, { withFileTypes: true })) {
+    if (!keepBin.has(e.name)) fs.rmSync(path.join(binDir, e.name), { recursive: true, force: true });
+  }
+}
+
 async function bundleWineRuntime() {
   const target = path.join(APP_DIR, 'native', 'wine-runtime');
   if (fs.existsSync(path.join(target, 'bin', 'wine'))) {
@@ -204,7 +233,8 @@ async function bundleWineRuntime() {
   if (!fs.existsSync(path.join(target, 'bin', 'wine'))) {
     throw new Error('wine binary not found after extract');
   }
-  logger.success('wine runtime bundled into app/native/wine-runtime');
+  pruneWineTree(target);
+  logger.success('wine runtime bundled into app/native/wine-runtime (pruned)');
 }
 
 /**
@@ -293,6 +323,15 @@ async function bundleGstRuntime() {
     // always be extracted.
     'printf "%s\\n" ' + ALL_PACKAGES.join(' ') + ' >> /out/keep.txt',
     'sort -u /out/keep.txt -o /out/keep.txt',
+    // Extraction blacklist: packages the recursive closure drags in that the
+    // runtime never loads — the openblas/blis/atlas BLAS provider families
+    // (libsphinxbase only needs libblas.so.3 + liblapack.so.3, which the
+    // reference libblas3/liblapack3 debs provide), the perl toolchain
+    // (nothing in the tree NEEDs libperl), OCR (tesseract/lept) and the
+    // alternate avfilter build. The post-extraction prune below is the belt
+    // for the same families in case a future package set reintroduces them
+    // via other names/paths.
+    'grep -vE "^(libatlas3-base|libblis3-.*|libopenblas0-.*|libavfilter-extra7|perl|perl-base|perl-modules-5.34|libperl5.34|liblept5|libtesseract4)$" /out/keep.txt > /out/keep.txt.tmp && mv /out/keep.txt.tmp /out/keep.txt',
     // Belt-and-braces: every package in the plan MUST have its deb in the
     // cache before extraction. `install --download-only` can silently skip
     // packages that apt deems satisfied (installed in the image, alternative
@@ -311,6 +350,15 @@ async function bundleGstRuntime() {
     '  n=$(dpkg-deb -f "$f" Package 2>/dev/null || true)',
     '  if grep -qxF "$n" /out/keep.txt; then dpkg-deb -x "$f" /out/root; fi',
     'done',
+    // Size prune (belt to the keep.txt blacklist, see above): BLAS/LAPACK
+    // provider families beyond the reference blas3/lapack3; perl/tesseract
+    // stacks nothing in the runtime NEEDs; intel mfx HW plugins (dlopen-
+    // probed only — QSV never runs under wine, libx264 is the encoder).
+    'cd /out/root/usr/lib/x86_64-linux-gnu 2>/dev/null && {',
+    '  rm -rf openblas-* blis-* atlas mfx perl perl-base perl5.34*',
+    '  rm -f libatlas* libcblas* libf77blas* liblapack_atlas* libmfxhw64* libperl* libtesseract* liblept*',
+    '} || true',
+    'rm -f /out/root/usr/bin/perl /out/root/usr/bin/perl5.34.0 2>/dev/null || true',
     'echo "$BUNDLE_STAMP" > /out/root/.bundle-stamp',
     // root-owned inside the container — give everything back to the
     // invoking user (NOT just root/: leftover root-owned dirs like

@@ -76,8 +76,8 @@ Người dùng **không cần cài gì thủ công**. Ngay lần mở app đầu
      (không bị che), kèm lý do cụ thể — nút **"Tải và bật ngay"** /
      **"Để sau"**, link nguồn tải minh bạch và checkbox
      **"Không hỏi lại lần sau nếu không tải"**
-2. Chọn tải → cửa sổ tiến trình *"Đang tải Wine (~94MB)…"* rồi *"Đang tải
-   GStreamer (~120MB)…"* với % trực quan → tự giải nén → tự khởi tạo prefix
+2. Chọn tải → cửa sổ tiến trình *"Đang tải Wine (~96MB)…"* rồi *"Đang tải
+   GStreamer (~105MB)…"* với % trực quan → tự giải nén → tự khởi tạo prefix
    (mất ~2-4 phút tổng cộng)
 3. Xong → thông báo *"Tính năng gọi điện đã sẵn sàng!"* — gọi được ngay,
    không cần khởi động lại, không cần quyền quản trị
@@ -310,10 +310,12 @@ Trên **phiên X11**, share screen hoạt động trực tiếp — không cần
   ```
 - **Camera mượt**: với wine classic, app tự bật `ZCALL_CAMERA_LOCK_FMT` —
   khóa stream YUYV 640x480@30 (thay vì để ZaloCall đàm phán 720p@10fps gây
-  lag). Nếu camera lạ không hỗ trợ YUYV, gỡ bằng
-  `ZCALL_CAMERA_FORCE_YUYV=0 ZCALL_CAMERA_LOCK_FMT=0` (quay về hành vi tự
-  đàm phán) hoặc `ZCALL_CAMERA_HIDE=1` (ẩn camera — gọi video một chiều,
-  không crash).
+  lag). 720p qua wine là CPU-bound (tinyjpeg + encode phần mềm) nên 640p@30
+  là mặc định tối ưu; máy mạnh muốn HD thì đặt `ZCALL_CAMERA_LOCK_FMT=best`
+  (tự dò format ≥30fps tốt nhất, thường là MJPG 1280x720@30). Nếu camera lạ
+  không hỗ trợ YUYV, gỡ bằng `ZCALL_CAMERA_FORCE_YUYV=0
+  ZCALL_CAMERA_LOCK_FMT=0` (quay về hành vi tự đàm phán) hoặc
+  `ZCALL_CAMERA_HIDE=1` (ẩn camera — gọi video một chiều, không crash).
 
 
 - Bản kron4ek **classic** (có i386-unix) là build mặc định cho cả Full
@@ -386,10 +388,11 @@ rm -rf /tmp/test-prefix
 
 - ✅ ZaloCall.exe chạy dưới Wine, kết nối đủ 2 kênh. Các bản đã test
   thật qua replay (init → makeCall → incall → success → sendSignal):
-  **11.17 classic** (96MB/852MB — bản khuyên dùng, video call đã xác minh
-  thật trên Mint 22 + Ubuntu 26.04), **11.17 wow64** (xác minh engine nhưng
-  crash camera trên một số host — xem mục Lưu ý), **11.14** (đã xác minh
-  trước đó),
+  **11.17 classic** (96MB tải / 652MB sau tỉa — bản khuyên dùng, video call
+  đã xác minh thật trên Mint 22 + Ubuntu 26.04; plugin tự tỉa ~200MB
+  dev-kit: headers, import libs, winegcc/widl/…), **11.17 wow64** (xác minh
+  engine nhưng crash camera trên một số host — xem mục Lưu ý), **11.14**
+  (đã xác minh trước đó),
   **8.6** (54MB/565MB — nhẹ hơn nhưng video call crash `msvcp140._Throw_C_error`
   thiếu hàm CRT khi gặp lỗi decode), **8.0.1**, **7.22**
 - ✅ **Video call hoạt động** trên Fedora (wine 11.14/11.17 + GStreamer 32-bit +
@@ -408,6 +411,13 @@ rm -rf /tmp/test-prefix
   `camtest.c` bắt frame thành công) — nền tảng cho biến thể Full. Wine wow64
   11.14/11.17 cũng xác minh engine chạy (LD_PRELOAD 64-bit load đúng) nhưng
   camera crash trên một số host (bug qcap WoW64 — xem mục Lưu ý)
+- ✅ Hộp thoại *"The wine configuration in ... is being updated, please wait"*
+  không còn hiện mỗi lần mở app: `wineboot -u` của wine **ép chạy update prefix
+  vô điều kiện** (wineboot.c: `update_wineprefix(force)`), nên plugin chỉ gọi nó
+  khi thật sự có update — soi `.update-timestamp` của prefix so với mtime
+  `share/wine/wine.inf` (đúng check no-op của chính wine). Kết quả: mỗi bản
+  build mới chỉ hiện hộp thoại đúng 1 lần khi nâng cấp wine, các lần mở sau
+  hoàn toàn im lặng.
 - ✅ **Bridge stack self-contained xác minh tại build** (4 gate tự động):
   ldd self-contained (15+ file, Xvfb allowlist libGL host), bundled python
   import `dbus`+`gi` OK, bundled gst-inspect đăng ký `pipewiresrc`/
