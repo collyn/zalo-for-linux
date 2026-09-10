@@ -878,17 +878,17 @@ async function build(buildName = '', outputSuffix = '') {
       buildTargets = outputSuffix === '-Full' || outputSuffix === '-PlainFull'
         ? 'AppImage'
         : 'AppImage deb rpm pacman';
-      buildCommand = `npx electron-builder --linux ${buildTargets} --config.linux.artifactName="${artifactName}" -c.extraMetadata.version=${ZALO_VERSION} --publish=never`;
+      buildCommand = `npx electron-builder --linux ${buildTargets} --config.linux.artifactName='${artifactName}' -c.extraMetadata.version=${ZALO_VERSION} --publish=never`;
       logger.info(`Building ${buildName} with Zalo: ${ZALO_VERSION}, ZaDark: ${zadarkVersion}, Commit: ${commitHash}`);
     } else if (outputSuffix === '-PlainFull') {
       artifactName = `Zalo-${ZALO_VERSION}-${commitHash}-Full.\${ext}`;
       buildTargets = 'AppImage';
-      buildCommand = `npx electron-builder --linux ${buildTargets} --config.linux.artifactName="${artifactName}" -c.extraMetadata.version=${ZALO_VERSION} --publish=never`;
+      buildCommand = `npx electron-builder --linux ${buildTargets} --config.linux.artifactName='${artifactName}' -c.extraMetadata.version=${ZALO_VERSION} --publish=never`;
       logger.info(`Building ${buildName} with Zalo: ${ZALO_VERSION}, Commit: ${commitHash}`);
     } else {
       artifactName = `Zalo-${ZALO_VERSION}-${commitHash}.\${ext}`;
       buildTargets = 'AppImage deb rpm pacman';
-      buildCommand = `npx electron-builder --linux ${buildTargets} --config.linux.artifactName="${artifactName}" -c.extraMetadata.version=${ZALO_VERSION} --publish=never`;
+      buildCommand = `npx electron-builder --linux ${buildTargets} --config.linux.artifactName='${artifactName}' -c.extraMetadata.version=${ZALO_VERSION} --publish=never`;
       logger.info(`Building ${buildName} with Zalo: ${ZALO_VERSION}, Commit: ${commitHash}`);
     }
     // Write build-info.json to the app directory so the AppImage will contain its metadata
