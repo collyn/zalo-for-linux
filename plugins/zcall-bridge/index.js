@@ -51,22 +51,19 @@ const os = require('os');
 const path = require('path');
 const https = require('https');
 
-// Recommended build: 11.17 classic amd64 (~96MB / ~652MB extracted after the
-// dev-kit prune — headers, import libs, winegcc/widl toolchain removed). Video
-// calls verified working on it (Mint 2026-09-10). The wow64 build crashes
-// ZaloCall's DirectShow camera path on some hosts — wine qcap WoW64
-// media-type marshaling bug (upstream MR10269/10377, unmerged as of 11.17;
-// minimal repro in zcall-bridge/camtest.c). Classic has no WoW64 boundary
-// and is immune — it only needs the host's 32-bit libraries, which the app
-// guides the user through when validation fails (getI386InstallHint).
+// The ONLY wine the app downloads: 11.17 classic amd64 (~96MB / ~652MB
+// extracted after the dev-kit prune — headers, import libs, winegcc/widl
+// toolchain removed). Video calls verified working on it (Mint 2026-09-10).
+// The wow64 build crashes ZaloCall's DirectShow camera path on some hosts
+// (wine qcap WoW64 media-type marshaling bug, upstream MR10269/10377
+// unmerged as of 11.17 — minimal repro in zcall-bridge/camtest.c), so it is
+// NOT offered as a download. Classic has no WoW64 boundary and is immune —
+// it only needs the host's 32-bit libraries, which the app guides the user
+// through when validation fails (getI386InstallHint).
 // NOTE: this is the SAME classic build the Full variants bundle (see
 // WINE_DOWNLOAD_URL_CLASSIC in scripts/build.js). Keep the two in sync.
 const WINE_DOWNLOAD_URL =
   'https://github.com/Kron4ek/Wine-Builds/releases/download/11.17/wine-11.17-amd64.tar.xz';
-// wow64 alternative (zero-install, needs NO host 32-bit libraries) — for
-// machines where classic is impractical: ZCALL_WINE_DOWNLOAD_URL=<this>
-const WINE_WOW64_DOWNLOAD_URL =
-  'https://github.com/Kron4ek/Wine-Builds/releases/download/11.17/wine-11.17-amd64-wow64.tar.xz';
 const RUNTIME_DIRNAME = 'zcall-wine-runtime';
 const CONFIG_FILENAME = 'zcall-config.json';
 const GST_DIRNAME = 'zcall-gst-runtime';
@@ -307,6 +304,17 @@ function validateWine(winePath, prefix) {
   // would happen identically at the first real call with that wine.
   const valPrefix = prefix;
   try {
+    // Wine version floor: distro wines are often old (Ubuntu 24.04 ships
+    // wine 9.0) and video calls are only verified on 11.x. Reject older
+    // builds so the incompatible-wine flow offers the app's verified 11.17
+    // classic download instead of a silent half-working call feature.
+    const ver = spawnSync(winePath, ['--version'], { encoding: 'utf8', timeout: 30000 });
+    const vm = /wine-(\d+)\.(\d+)/.exec(ver.stdout || '');
+    if (ver.status !== 0 || !vm || parseInt(vm[1], 10) < 11) {
+      debugLog('validate REJECT old wine=' + winePath + ' version=' + String(ver.stdout || '').trim());
+      console.error('[zcall-bridge] wine quá cũ (cần ≥ 11):', winePath);
+      return false;
+    }
     const res = spawnSync(winePath, [pipebridgePath, '--version'], {
       env: Object.assign({}, process.env, { WINEPREFIX: valPrefix, WINEDEBUG: '-all' }),
       encoding: 'utf8',
@@ -560,7 +568,7 @@ function showAskWindow(failedWine) {
   });
   const downloadUrl = process.env.ZCALL_WINE_DOWNLOAD_URL || WINE_DOWNLOAD_URL;
   const headLine = failedWine
-    ? 'Wine trên máy bạn không tương thích với tính năng gọi (không chạy được ứng dụng 32-bit). Tải bản Wine tương thích?'
+    ? 'Wine trên máy bạn không tương thích với tính năng gọi (cần wine ≥ 11 và chạy được ứng dụng 32-bit). Tải bản Wine tương thích?'
     : 'Tính năng gọi điện cần Wine. Tải và bật ngay bây giờ?';
   // A failed system/custom wine candidate brought us here — show the
   // distro-specific 32-bit lib hint for that manual path.
@@ -739,12 +747,17 @@ async function promptAndInstall(userDataDir, failedWine) {
     progress.set(100, 'Đang giải nén Wine…');
 
     // Companion 64-bit GStreamer tree (standard variants). Skipped when a
-    // bundle is already live (Full variant: env exported by launch()).
+    // bundle is already live (Full variant: env exported by launch()) or
+    // when the system already has a usable GStreamer — the deb/rpm/pacman
+    // packages install it as a dependency, so re-downloading the asset
+    // would be pure waste.
     let gstDir = null;
-    if (!findBundledGstRuntime(userDataDir)) {
+    if (!findBundledGstRuntime(userDataDir) && !hasSystemGst()) {
       progress.set(0, 'Đang tải GStreamer…');
       gstDir = await installDownloadedGst(userDataDir, stageText('Đang tải GStreamer'));
       progress.set(100, gstDir ? 'Đang giải nén GStreamer…' : 'Không tải được GStreamer (sẽ dùng bản hệ thống)');
+    } else if (!findBundledGstRuntime(userDataDir)) {
+      debugLog('install: hệ thống đã có GStreamer (pipewiresrc) — bỏ qua tải asset');
     }
 
     // First prefix init (~10-30s, done once)
@@ -802,6 +815,24 @@ async function promptAndInstall(userDataDir, failedWine) {
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
+
+/**
+ * Is a usable 64-bit GStreamer already on the system? The deb/rpm/pacman
+ * packages install gst + the pipewire plugin as dependencies, so
+ * downloading the release asset would be redundant — check what the bridge
+ * actually needs (gst-launch present + pipewiresrc registering).
+ */
+function hasSystemGst() {
+  try {
+    execSync('command -v gst-launch-1.0', { stdio: 'pipe' });
+    const out = execSync('gst-inspect-1.0 pipewiresrc 2>/dev/null | head -5', {
+      encoding: 'utf8', stdio: 'pipe'
+    });
+    return /pipewiresrc/.test(out);
+  } catch (e) {
+    return false;
+  }
+}
 
 /**
  * Mirror wine's own prefix-update no-op check: wineboot compares the
@@ -1105,7 +1136,7 @@ function openSetupDialog({ userDataDir }) {
       <button id="setpath">Dùng đường dẫn này</button>
     </div>
     <button id="browse">Chọn file wine khác…</button>
-    <button id="download">Tải Wine + GStreamer về (~${96 + GST_DOWNLOAD_MB}MB)</button>
+    <button id="download"></button>
     <button id="clear">Bỏ lựa chọn wine đã lưu</button>
     <button id="remove">Xóa Wine + GStreamer đã tải về khỏi máy</button>
     <button id="close">Đóng</button>
@@ -1124,21 +1155,42 @@ function openSetupDialog({ userDataDir }) {
       ipcRenderer.on('zcall-cfg-status', (e, text) => {
         document.getElementById('status').textContent = text;
       });
+      ipcRenderer.on('zcall-cfg-download-label', (e, text) => {
+        document.getElementById('download').textContent = text;
+      });
     </script>
   </body></html>`;
   win.loadURL('data:text/html;charset=utf-8,' + encodeURIComponent(html));
 
-  const currentWine = () => process.env.ZCALL_WINE || findWine() || findDownloadedWine(userDataDir);
-  const pushStatus = () => {
-    const w = currentWine();
+  const currentWine = () => {
+    if (process.env.ZCALL_WINE) return { w: process.env.ZCALL_WINE, src: 'biến môi trường' };
     const cfg = readConfig(userDataDir);
-    let text = w
-      ? 'Wine đang dùng: ' + w + (cfg.winePath ? '\n(Lựa chọn đã lưu: ' + cfg.winePath + ')' : '')
+    if (cfg.winePath && fs.existsSync(cfg.winePath)) return { w: cfg.winePath, src: 'lựa chọn đã lưu' };
+    const bundled = findBundledWine();
+    if (bundled) return { w: bundled, src: 'bundle trong app (Full)' };
+    const dl = findDownloadedWine(userDataDir);
+    if (dl) return { w: dl, src: 'đã tải về' };
+    const sys = findWine();
+    if (sys) return { w: sys, src: 'wine hệ thống' };
+    return null;
+  };
+  const pushStatus = () => {
+    const cw = currentWine();
+    let text = cw
+      ? 'Wine đang dùng (' + cw.src + '):\n' + cw.w
       : 'Chưa có wine — tính năng gọi chưa hoạt động.';
-    if (findDownloadedWine(userDataDir) && !findBundledGstRuntime(userDataDir)) {
-      text += '\n(GStreamer 64-bit chưa tải — camera/share sẽ dùng gst hệ thống)';
+    if (!findBundledGstRuntime(userDataDir) && !hasSystemGst()) {
+      text += '\n(GStreamer 64-bit chưa có — cần cho share screen trên Wayland)';
     }
-    try { win.webContents.send('zcall-cfg-status', text); } catch (e) { /* closed */ }
+    // When a working wine is already live, downloading is just an
+    // alternative, not a requirement — relabel accordingly.
+    const dlLabel = cw
+      ? 'Tải wine riêng của app (thay wine đang dùng)'
+      : 'Tải Wine + GStreamer về (~' + (96 + GST_DOWNLOAD_MB) + 'MB)';
+    try {
+      win.webContents.send('zcall-cfg-status', text);
+      win.webContents.send('zcall-cfg-download-label', dlLabel);
+    } catch (e) { /* closed */ }
   };
   pushStatus();
 

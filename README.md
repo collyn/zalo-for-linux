@@ -69,6 +69,16 @@ We strongly recommend using **Gear Lever** to integrate the AppImage perfectly i
 4.  Click the **"Open"** button in the top-left corner and select the `.AppImage` file you downloaded.
 5.  The app will now appear in Gear Lever. Click the **"Unlock"** button, then choose **"Move to the app menu"** to integrate it into your system's application launcher.
 
+### Native packages
+
+Every release also ships native packages for the **standard variants** — light installers (~200MB). The package manager installs GStreamer (64-bit + 32-bit), Xvfb and the 32-bit libraries from the distro repos, and the **install script downloads the verified wine 11.17 classic** into the app — calls work immediately after install (distro wines are too old — e.g. wine 9.0 on Ubuntu 24.04 — or wow64-only, which breaks video calls; offline installs fall back to the app's first-run download):
+
+- **`.deb`** for Debian/Ubuntu/Linux Mint (needs `universe`)
+- **`.rpm`** for Fedora/openSUSE
+- **`.pacman`** for Arch (install with `sudo pacman -U <file>`; the `multilib` repo must be enabled)
+
+Both standard variants (with and without ZaDark) are published in all formats. The **Full** variants (call engine bundled inside, works with zero setup on any distro) remain AppImage-only.
+
 ### Build from Source
 
 Prerequisites:
@@ -86,7 +96,7 @@ On Debian/Ubuntu:
 sudo dpkg --add-architecture i386
 sudo apt-get update && sudo apt-get install -y p7zip-full build-essential libssl-dev liblzma-dev \
   gcc-mingw-w64-i686 gcc-multilib libc6-dev-i386 libx11-dev libxcb1-dev libxext-dev \
-  libx11-dev:i386 libxcb1-dev:i386 libxext-dev:i386 libpipewire-0.3-0
+  libx11-dev:i386 libxcb1-dev:i386 libxext-dev:i386 libpipewire-0.3-0 rpm
 ```
 
 (`gcc-mingw-w64-i686` builds `pipebridge.exe`; the multilib/i386 X11 dev

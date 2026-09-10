@@ -849,6 +849,7 @@ async function build(buildName = '', outputSuffix = '') {
     // Set artifact name and build command based on build type
     let artifactName;
     let buildCommand;
+    let buildTargets;
     let zadarkVersion = null;
 
     if (outputSuffix === '-ZaDark' || outputSuffix === '-Full') {
@@ -866,16 +867,28 @@ async function build(buildName = '', outputSuffix = '') {
         }
       }
 
-      artifactName = `Zalo-${ZALO_VERSION}+ZaDark-${zadarkVersion}-${commitHash}${outputSuffix}.AppImage`;
-      buildCommand = `npx electron-builder --linux --config.linux.artifactName="${artifactName}" -c.extraMetadata.version=${ZALO_VERSION} --publish=never`;
+      artifactName = `Zalo-${ZALO_VERSION}+ZaDark-${zadarkVersion}-${commitHash}${outputSuffix}.\${ext}`;
+      // Native packages (deb/rpm/pacman) are STANDARD variants: the
+      // package manager installs wine + GStreamer + the i386 libs from the
+      // distro repos (declared in package.json), so the package itself
+      // stays light (~200MB) and install-and-use — the same app as the
+      // standard AppImage, with the components as system packages instead
+      // of a first-run download. The Full variants (wine + GStreamer
+      // bundled) remain AppImage-only.
+      buildTargets = outputSuffix === '-Full' || outputSuffix === '-PlainFull'
+        ? 'AppImage'
+        : 'AppImage deb rpm pacman';
+      buildCommand = `npx electron-builder --linux ${buildTargets} --config.linux.artifactName="${artifactName}" -c.extraMetadata.version=${ZALO_VERSION} --publish=never`;
       logger.info(`Building ${buildName} with Zalo: ${ZALO_VERSION}, ZaDark: ${zadarkVersion}, Commit: ${commitHash}`);
     } else if (outputSuffix === '-PlainFull') {
-      artifactName = `Zalo-${ZALO_VERSION}-${commitHash}-Full.AppImage`;
-      buildCommand = `npx electron-builder --linux --config.linux.artifactName="${artifactName}" -c.extraMetadata.version=${ZALO_VERSION} --publish=never`;
+      artifactName = `Zalo-${ZALO_VERSION}-${commitHash}-Full.\${ext}`;
+      buildTargets = 'AppImage';
+      buildCommand = `npx electron-builder --linux ${buildTargets} --config.linux.artifactName="${artifactName}" -c.extraMetadata.version=${ZALO_VERSION} --publish=never`;
       logger.info(`Building ${buildName} with Zalo: ${ZALO_VERSION}, Commit: ${commitHash}`);
     } else {
-      artifactName = `Zalo-${ZALO_VERSION}-${commitHash}.AppImage`;
-      buildCommand = `npx electron-builder --linux --config.linux.artifactName="${artifactName}" -c.extraMetadata.version=${ZALO_VERSION} --publish=never`;
+      artifactName = `Zalo-${ZALO_VERSION}-${commitHash}.\${ext}`;
+      buildTargets = 'AppImage deb rpm pacman';
+      buildCommand = `npx electron-builder --linux ${buildTargets} --config.linux.artifactName="${artifactName}" -c.extraMetadata.version=${ZALO_VERSION} --publish=never`;
       logger.info(`Building ${buildName} with Zalo: ${ZALO_VERSION}, Commit: ${commitHash}`);
     }
     // Write build-info.json to the app directory so the AppImage will contain its metadata
@@ -915,62 +928,53 @@ async function build(buildName = '', outputSuffix = '') {
       encoding: 'utf8'
     });
 
-    // Parse build output to find AppImage file
-    const appImageMatch = buildOutput.match(/file=(dist\/.*\.AppImage)/);
-    let appImageFile = null;
-    let appImageName = null;
+    // Parse build output to find every produced artifact (one `file=` line
+    // per target: AppImage, deb, rpm, pacman).
+    const artifactFiles = [...buildOutput.matchAll(/file=(dist\/[^\s]+)/g)].map((m) => m[1]);
+    const variantLabel = outputSuffix === '-Full' ? '🍷 Full (ZaDark)'
+      : outputSuffix === '-PlainFull' ? '🍷 Full'
+      : outputSuffix === '-ZaDark' ? '🎨 ZaDark'
+      : '📦 Original';
+    const builtByTarget = {};
 
-    if (appImageMatch) {
-      appImageFile = appImageMatch[1];
-      appImageName = path.basename(appImageFile);
-
-      // Get file size
-      if (fs.existsSync(path.join(BASE_DIR, appImageFile))) {
-        const fullPath = path.join(BASE_DIR, appImageFile);
-        const size = fs.statSync(fullPath).size;
-        const sizeStr = size > 1024 * 1024
-          ? `${Math.round(size / 1024 / 1024)}MB`
-          : `${Math.round(size / 1024)}KB`;
-
-        // Calculate SHA256 for logging
-        let fileSha256 = 'unknown';
-        try {
-          const sha256Output = execSync(`sha256sum "${fullPath}"`, { encoding: 'utf8' });
-          fileSha256 = sha256Output.split(' ')[0];
-        } catch (error) {
-          logger.warn('Could not calculate SHA256');
-        }
-        
-        logger.success(`Built ${appImageName} (${sizeStr})`);
-        logger.dim(`SHA256: ${fileSha256}`);
-        
-        builtFiles.push({
-          type: outputSuffix === '-Full' ? '🍷 Full (ZaDark)' : outputSuffix === '-PlainFull' ? '🍷 Full' : outputSuffix === '-ZaDark' ? '🎨 ZaDark' : '📦 Original',
-          name: appImageName,
-          sizeStr
-        });
-      } else {
-        logger.warn(`AppImage file not found: ${appImageFile}`);
+    if (!artifactFiles.length) {
+      logger.warn('Could not find any artifact path in build output');
+    }
+    for (const file of artifactFiles) {
+      const fullPath = path.join(BASE_DIR, file);
+      if (!fs.existsSync(fullPath)) {
+        logger.warn(`Artifact file not found: ${file}`);
+        continue;
       }
-    } else {
-      logger.warn('Could not find AppImage path in build output');
+      const name = path.basename(file);
+      const target = path.extname(name).slice(1).toLowerCase(); // appimage / deb / rpm / pacman
+      const size = fs.statSync(fullPath).size;
+      const sizeStr = size > 1024 * 1024
+        ? `${Math.round(size / 1024 / 1024)}MB`
+        : `${Math.round(size / 1024)}KB`;
+
+      let fileSha256 = 'unknown';
+      try {
+        const sha256Output = execSync(`sha256sum "${fullPath}"`, { encoding: 'utf8' });
+        fileSha256 = sha256Output.split(' ')[0];
+      } catch (error) {
+        logger.warn('Could not calculate SHA256');
+      }
+
+      logger.success(`Built ${name} (${sizeStr})`);
+      logger.dim(`SHA256: ${fileSha256}`);
+
+      builtFiles.push({ type: variantLabel, name, sizeStr });
+      builtByTarget[target] = { file, name };
     }
 
-    // Export build info to GitHub Actions
+    // Export build info to GitHub Actions (one pair of outputs per target).
     if (process.env.GITHUB_OUTPUT) {
       const prefix = outputSuffix === '-PlainFull' ? 'plainfull_' : outputSuffix === '-Full' ? 'full_' : outputSuffix === '-ZaDark' ? 'zadark_' : 'original_';
-
-      // Export build-specific info
-      const specificOutputs = [
-        `${prefix}appimage_file=${appImageFile || ''}`,
-        `${prefix}appimage_name=${appImageName || ''}`
-      ];
-
-      specificOutputs.forEach(output => {
-        fs.appendFileSync(process.env.GITHUB_OUTPUT, output + '\n');
-      });
-
-      logger.dim(`Exported ${prefix.replace('_', '')} build info to GitHub Actions`);
+      for (const [target, info] of Object.entries(builtByTarget)) {
+        fs.appendFileSync(process.env.GITHUB_OUTPUT, `${prefix}${target}_file=${info.file}\n${prefix}${target}_name=${info.name}\n`);
+      }
+      logger.dim(`Exported ${prefix.replace('_', '')} build info to GitHub Actions (${Object.keys(builtByTarget).length} targets)`);
     }
   } catch (error) {
     logger.error('Build failed:', error.message);
