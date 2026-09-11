@@ -229,19 +229,7 @@ function applyWineEnv(wine, prefix) {
   if (!process.env.WINEDEBUG) process.env.WINEDEBUG = '-all';
   const proxy = selectProxySo(wine);
   if (fs.existsSync(proxy)) process.env.ZCALL_PROXY_SO = proxy;
-  // Lock the camera to YUYV 640x480@30 (all wine flavors). Wine's
-  // DirectShow capture advertises RGB24 at the device's native sizes, and
-  // ZaloCall then negotiates 1280x720 — which most UVC cams only deliver at
-  // 10fps (the "laggy video" symptom). Without the lock every camera
-  // re-open re-negotiates freely, so the quality visibly jumps between
-  // cycles (the Mint "jumpy video" bug). 640x480 is natively 30fps on
-  // virtually every UVC camera, so the stream stays smooth and constant.
-  // User-set levers win: only default when no camera env is present.
-  if (!process.env.ZCALL_CAMERA_LOCK_FMT &&
-      !process.env.ZCALL_CAMERA_FORCE_YUYV && !process.env.ZCALL_CAMERA_PASSTHROUGH &&
-      !process.env.ZCALL_CAMERA_HIDE) {
-    process.env.ZCALL_CAMERA_LOCK_FMT = '1';
-  }
+
 }
 
 /**
