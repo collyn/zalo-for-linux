@@ -560,7 +560,10 @@ async function bundleGstRuntime() {
     const missing = [];
     let lddToolMissing = false;
     for (const f of lddFiles) {
-      const full = path.join(libDir, f);
+      // lddFiles entries are already absolute (joined with libDir above);
+      // path.join does NOT reset on absolute segments — a naive join would
+      // DOUBLE the prefix.
+      const full = path.isAbsolute(f) ? f : path.join(libDir, f);
       if (!fs.existsSync(full)) {
         // Hard defect: a gate target is absent even though the existence
         // gate passed moments ago — dump everything to pinpoint it.

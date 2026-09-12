@@ -1072,19 +1072,19 @@ function getI386InstallHint() {
   if (idLike.includes('fedora') || idLike.includes('rhel') || idLike.includes('centos')) {
     return {
       title: 'Cài thư viện 32-bit (Fedora/RHEL):',
-      command: 'sudo dnf install -y glibc.i686 libX11.i686 libXext.i686 freetype.i686 mesa-libGL.i686 pulseaudio-libs.i686 alsa-lib.i686 libv4l.i686 zlib-ng-compat.i686 gstreamer1.i686 gstreamer1-plugins-base.i686 gstreamer1-plugins-good.i686 gstreamer1-plugins-bad-free.i686\n\n(GStreamer 32-bit cần cho video call; gstreamer1-plugin-libav cần RPM Fusion)\n\nHoặc cài wine hệ thống (tự kéo đủ thư viện):\nsudo dnf install wine'
+      command: 'sudo dnf install -y glibc.i686 libX11.i686 libXext.i686 freetype.i686 mesa-libGL.i686 pulseaudio-libs.i686 alsa-lib.i686 zlib-ng-compat.i686\n\n(GStreamer 32-bit đã có sẵn trong app — không cần cài)\n\nHoặc cài wine hệ thống (tự kéo đủ thư viện):\nsudo dnf install wine'
     };
   }
   if (idLike.includes('arch')) {
     return {
       title: 'Cài thư viện 32-bit (Arch):',
-      command: 'sudo pacman -S --needed lib32-glibc lib32-libx11 lib32-libxext lib32-freetype2 lib32-mesa lib32-libpulse lib32-alsa-lib lib32-libv4l lib32-zlib lib32-gstreamer lib32-gst-plugins-base lib32-gst-plugins-good lib32-gst-plugins-bad lib32-gst-libav\n\n(GStreamer 32-bit cần cho video call)\n\nHoặc cài wine hệ thống:\nsudo pacman -S wine'
+      command: 'sudo pacman -S --needed lib32-glibc lib32-libx11 lib32-libxext lib32-freetype2 lib32-mesa lib32-libpulse lib32-alsa-lib lib32-zlib\n\n(GStreamer 32-bit đã có sẵn trong app — không cần cài)\n\nHoặc cài wine hệ thống:\nsudo pacman -S wine'
     };
   }
   // default: Debian/Ubuntu family
   return {
     title: 'Cài thư viện 32-bit (Ubuntu/Debian):',
-    command: 'sudo dpkg --add-architecture i386 && sudo apt update\nsudo apt install -y libc6:i386 libx11-6:i386 libfreetype6:i386 libgl1:i386 libpulse0:i386 libasound2:i386 libv4l-0:i386 zlib1g:i386 libgstreamer1.0-0:i386 libgstreamer-plugins-base1.0-0:i386 gstreamer1.0-plugins-good:i386 gstreamer1.0-plugins-bad:i386 gstreamer1.0-libav:i386\n\n(GStreamer 32-bit cần cho video call)\n\nHoặc cài wine hệ thống (tự kéo đủ thư viện):\nsudo apt install wine'
+    command: 'sudo dpkg --add-architecture i386 && sudo apt update\nsudo apt install -y libc6:i386 libx11-6:i386 libfreetype6:i386 libgl1:i386 libpulse0:i386 libasound2:i386 zlib1g:i386\n\n(GStreamer 32-bit đã có sẵn trong app — không cần cài)\n\nHoặc cài wine hệ thống (tự kéo đủ thư viện):\nsudo apt install wine'
   };
 }
 

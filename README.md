@@ -71,7 +71,7 @@ We strongly recommend using **Gear Lever** to integrate the AppImage perfectly i
 
 ### Native packages
 
-Every release also ships native packages for the **standard variants** — light installers (~200MB). The package manager installs GStreamer (64-bit + 32-bit), Xvfb and the 32-bit libraries from the distro repos, and the **install script downloads the verified wine 11.17 classic** into the app — calls work immediately after install (distro wines are too old — e.g. wine 9.0 on Ubuntu 24.04 — or wow64-only, which breaks video calls; offline installs fall back to the app's first-run download):
+Every release also ships native packages for the **standard variants** — light installers (~200MB). The package manager installs the small bridge-side GStreamer stack (64-bit), Xvfb and the 32-bit libraries from the distro repos, and the **install script downloads the verified wine 11.17 classic** into the app — calls work immediately after install (the 32-bit GStreamer stack for the camera ships inside the app itself; distro wines are too old — e.g. wine 9.0 on Ubuntu 24.04 — or wow64-only, which breaks video calls; offline installs fall back to the app's first-run download):
 
 - **`.deb`** for Debian/Ubuntu/Linux Mint (needs `universe`)
 - **`.rpm`** for Fedora/openSUSE
