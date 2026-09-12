@@ -70,7 +70,10 @@ const GST_DIRNAME = 'zcall-gst-runtime';
 const GST_TARBALL_NAME = 'zcall-gst-download.tar.xz';
 const GST_RUNTIME_MARKER = path.join('usr', 'lib', 'x86_64-linux-gnu', 'libgstreamer-1.0.so.0');
 // Ask-window/progress text; measured from a real CI build (dist asset).
-const GST_DOWNLOAD_MB = 105;
+// 64-bit gst tree for the Wayland screen-share bridge only (estimate after
+// the libav/blas/lapack/plugins-good and python-closure drops — the old
+// 105MB served the retired wow64 call path too).
+const GST_DOWNLOAD_MB = 18;
 
 let dialogModule = null;
 let BrowserWindowModule = null;
@@ -230,6 +233,17 @@ function applyWineEnv(wine, prefix) {
   const proxy = selectProxySo(wine);
   if (fs.existsSync(proxy)) process.env.ZCALL_PROXY_SO = proxy;
 
+  // Bundled 32-bit GStreamer — the ONLY call path. Ubuntu 24.04's i386
+  // gst 1.24 + libv4l 1.26 stalls UVC cameras (DQBUF EPIPE) in wine's
+  // capture path, so every wine flavor gets the bundled 26.04 stack
+  // (gst 1.28 + libv4l 1.32). The 64-bit gst-runtime no longer serves
+  // calls at all — it is only the Wayland screen-share bridge's stack.
+  const gst32 = zcallBridgePath('gst-i386', 'usr', 'lib', 'i386-linux-gnu');
+  if (fs.existsSync(gst32)) {
+    process.env.ZCALL_GST_RUNTIME_I386 = gst32;
+    process.env.ZCALL_GST_REGISTRY =
+      path.join(os.homedir(), '.config', 'ZaloData', 'gst-registry-32.bin');
+  }
 }
 
 /**
@@ -1013,6 +1027,11 @@ function launch({ userDataDir }) {
     watchShareRequests();
   }
 
+  // Camera capture: classic wine uses the bundled 32-bit GStreamer stack
+  // (see applyWineEnv). Ubuntu 24.04's i386 gst 1.24 + libv4l 1.26 stalls
+  // UVC cameras (DQBUF EPIPE) in wine's capture path — the bundled 26.04
+  // stack (gst 1.28 + libv4l 1.32) fixes it everywhere, no loopback needed.
+
   console.log('[zcall-bridge] wine ready:', wine, '(prefix:', prefix + ')');
   return true;
 }
@@ -1578,10 +1597,10 @@ function screenBridgeActive() {
   return bridgeProcs.some((p) => p && p.exitCode === null && !p.killed);
 }
 
-// Per-binary location inside the gst-runtime tree.
+// Per-binary location inside the gst-runtime tree. python3 is deliberately
+// absent — screenbridge.py runs on the HOST python3 (see bridgeTools).
 const BRIDGE_BIN_RELS = {
   xvfb: 'usr/bin/Xvfb',
-  python3: 'usr/bin/python3',
   xdotool: 'usr/bin/xdotool',
   'gst-launch-1.0': 'usr/bin/gst-launch-1.0',
   'gst-inspect-1.0': 'usr/bin/gst-inspect-1.0',
@@ -1608,37 +1627,25 @@ function bridgeTools() {
       if (!fs.existsSync(p)) { complete = false; break; }
       tools[name] = p;
     }
-    // The interpreter alone is useless without its stdlib tree.
-    if (!fs.existsSync(path.join(rt, 'usr', 'lib', 'python3.10'))) complete = false;
     if (complete) {
       const libDir = path.join(rt, 'usr', 'lib', 'x86_64-linux-gnu');
       const env = Object.assign({}, process.env, {
         // Prepend, never replace: screenbridge.py launches `gst-launch-1.0`
-        // by bare name; the bundle must win that lookup.
+        // by bare name; the bundle must win that lookup. python3 itself is
+        // the HOST interpreter (bundle ships none), so it resolves past the
+        // bundle bin dir to /usr/bin.
         PATH: path.join(rt, 'usr', 'bin') + ':' + (process.env.PATH || ''),
-        LD_LIBRARY_PATH: libDir + (process.env.LD_LIBRARY_PATH ? ':' + process.env.LD_LIBRARY_PATH : ''),
-        // Mirror the wine-spawn recipe (patch-zcall-callv2.js) so gst-launch
-        // and winegstreamer see the same plugin universe.
-        GST_PLUGIN_PATH: path.join(libDir, 'gstreamer-1.0'),
-        GST_PLUGIN_SYSTEM_PATH: path.join(rt, 'system'),
+        // The gst overrides travel under ZCALL_GST_BUNDLE_* — NOT directly —
+        // so the HOST python3 process never loads the bundle's jammy
+        // glib/libdbus (mixed-version dlopen = segfault risk). screenbridge.py
+        // composes the gst child's env from these when it launches the
+        // pipeline.
+        ZCALL_GST_BUNDLE_LIBDIR: libDir,
+        ZCALL_GST_BUNDLE_PLUGIN_PATH: path.join(libDir, 'gstreamer-1.0'),
+        ZCALL_GST_BUNDLE_PLUGIN_SYSTEM_PATH: path.join(rt, 'system'),
         // Pin the scanner to the bundle's own (compiled-in /usr/lib lookups
         // would otherwise hit a host gstreamer of a different version).
-        GST_PLUGIN_SCANNER: path.join(libDir, 'gstreamer1.0', 'gstreamer-1.0', 'gst-plugin-scanner'),
-        // Relocated python3.10: PYTHONHOME points at the tree root; the
-        // explicit PYTHONPATH adds the stdlib/dynload/dist-packages dirs the
-        // relocated getpath cannot derive. PYTHONNOUSERSITE keeps a host
-        // ~/.local site-packages out of the picture.
-        PYTHONHOME: path.join(rt, 'usr'),
-        PYTHONPATH: [
-          path.join(rt, 'usr', 'lib', 'python3.10'),
-          path.join(rt, 'usr', 'lib', 'python3.10', 'lib-dynload'),
-          path.join(rt, 'usr', 'lib', 'python3', 'dist-packages'),
-        ].join(':'),
-        PYTHONNOUSERSITE: '1',
-        // pygobject locates .typelib files only via GI_TYPELIB_PATH or the
-        // compiled-in /usr/lib path — mandatory on machines that never had
-        // python3-gi installed.
-        GI_TYPELIB_PATH: path.join(libDir, 'girepository-1.0'),
+        ZCALL_GST_BUNDLE_PLUGIN_SCANNER: path.join(libDir, 'gstreamer1.0', 'gstreamer-1.0', 'gst-plugin-scanner'),
         // No SPA/PIPEWIRE overrides: the bundle deliberately ships NO
         // pipewire client (PW_STRIP in build.js) — the bridge uses the
         // HOST pipewire stack, which always matches the session's daemon
@@ -1648,7 +1655,9 @@ function bridgeTools() {
       // (same bundle), but no concurrent-scan write contention when a share
       // starts mid-call. Unset -> gst falls back to its default writable
       // cache; on Full it is always set by launch() first.
-      if (process.env.ZCALL_GST_REGISTRY_BRIDGE) env.GST_REGISTRY = process.env.ZCALL_GST_REGISTRY_BRIDGE;
+      if (process.env.ZCALL_GST_REGISTRY_BRIDGE) {
+        env.ZCALL_GST_BUNDLE_REGISTRY = process.env.ZCALL_GST_REGISTRY_BRIDGE;
+      }
       // The bundled gstpipewiresrc (jammy 0.3.48) also cannot take buffers
       // from modern daemons ("error alloc buffers: Invalid argument" on
       // KWin 6 — no dma-buf modifier support), and a host-built plugin
@@ -1801,12 +1810,14 @@ function startScreenBridge() {
     }, 1500);
     // screenbridge.py inherits os.environ from this spawn, so its nested
     // bare `gst-launch-1.0` resolves through the prepended PATH to the
-    // bundled binary and picks up the bundle GST_*/GI_* vars. The host
+    // bundled binary and picks up the bundle GST_* vars. The host
     // XDG_RUNTIME_DIR / DBUS_SESSION_BUS_ADDRESS pass through untouched —
     // they ARE the session pipewire socket + portal bus the flow needs.
     // detached: python becomes a process-group leader so stopScreenBridge
     // can kill gst (its child) with the group on forced teardown.
-    const py = spawn(tools.source === 'bundle' ? tools.tools.python3 : 'python3',
+    // python3 is ALWAYS the host interpreter (bridgeTools resolves it from
+    // PATH) — only the gst env comes from the bundle when present.
+    const py = spawn('python3',
       [pyPath, BRIDGE_DISPLAY], Object.assign({ stdio: ['ignore', 'ignore', 'pipe'], detached: true },
         tools.source === 'bundle' ? { env: tools.env } : {}));
     py.isGroupLeader = true;

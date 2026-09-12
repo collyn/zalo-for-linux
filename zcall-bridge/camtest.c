@@ -11,6 +11,13 @@
  * Run:    WINEPREFIX=... wine camtest.exe [out.bmp]
  *         (optionally with LD_PRELOAD=streamproxy-x86_64.so to include the
  *          shim, exactly as the app runs it)
+ *
+ * Exit codes (used by the plugin's camera probe):
+ *   0 = a frame was captured — wine's native camera path WORKS
+ *   1 = no camera device visible to DirectShow (nothing to bridge)
+ *   2-6 = DirectShow setup failures (the bridge cannot help either)
+ *   7 = capture graph ran but no frame arrived (the EPIPE race family)
+ *   crash/hang = the wine qcap crash the bridge exists to work around
  */
 #include <windows.h>
 #include <dshow.h>
@@ -201,10 +208,13 @@ int main(int argc, char **argv) {
             /* crop header to what the buffer holds (top-down vs bottom-up) */
             if (save_bmp(out, &vh->bmiHeader, buf)) printf("saved %s\n", out);
             else printf("BMP write failed\n");
+            free(buf);
+            return 0; /* PROBE: frame captured — native path works */
         }
         free(buf);
     } else {
         printf("GetConnectedMediaType failed\n");
     }
-    return 0;
+    /* Graph ran but no frame arrived: the V4L2/DQBUF failure family. */
+    return 7;
 }

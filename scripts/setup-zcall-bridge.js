@@ -164,7 +164,7 @@ async function main() {
   const proxySo = path.join(ROOT, 'zcall-bridge', 'streamproxy.so');
   if (fs.existsSync(proxySrc)) {
     try {
-      execSync(`gcc -m32 -shared -fPIC -O2 "${proxySrc}" -ldl -lX11 -lxcb -o "${proxySo}"`, {
+      execSync(`gcc -m32 -shared -fPIC -O2 "${proxySrc}" -ldl -lX11 -lxcb -lpthread -o "${proxySo}"`, {
         cwd: ROOT, stdio: 'pipe'
       });
       logger.dim('streamproxy.so (32-bit) compiled from source');
@@ -181,7 +181,7 @@ async function main() {
     //     the hard requirement; this one only serves the wow64 runtime.
     const proxySo64 = path.join(ROOT, 'zcall-bridge', 'streamproxy-x86_64.so');
     try {
-      execSync(`gcc -shared -fPIC -O2 "${proxySrc}" -ldl -lX11 -lxcb -o "${proxySo64}"`, {
+      execSync(`gcc -shared -fPIC -O2 "${proxySrc}" -ldl -lX11 -lxcb -lpthread -o "${proxySo64}"`, {
         cwd: ROOT, stdio: 'pipe'
       });
       logger.dim('streamproxy-x86_64.so (64-bit) compiled from source');
@@ -191,6 +191,52 @@ async function main() {
     }
   } else {
     logger.warn('streamproxy.c missing — share screen will not work on Wayland');
+  }
+
+  // -------------------------------------------------------------------------
+  // 4. camtest.exe — the per-machine camera probe (wine DirectShow capture)
+  //    that decides whether the v4l2loopback bridge is needed. Same mingw
+  //    toolchain as pipebridge.exe above, so it is required too.
+  // -------------------------------------------------------------------------
+  const camtestSrc = path.join(ROOT, 'zcall-bridge', 'camtest.c');
+  const camtestExe = path.join(ROOT, 'zcall-bridge', 'camtest.exe');
+  try {
+    execSync(`i686-w64-mingw32-gcc "${camtestSrc}" -lstrmiids -lole32 -loleaut32 -o "${camtestExe}"`, {
+      cwd: ROOT, stdio: 'pipe'
+    });
+    logger.dim('camtest.exe compiled from source');
+  } catch (e) {
+    throw new Error(
+      'mingw (i686-w64-mingw32-gcc) is required to build camtest.exe — ' +
+      'install it with: sudo apt install gcc-mingw-w64-i686' +
+      ' (gcc said: ' + String(e.stderr || e.message).trim().slice(-300) + ')'
+    );
+  }
+
+  // -------------------------------------------------------------------------
+  // 5. Bundled 32-bit GStreamer stack (gst 1.28 + libv4l 1.32, Ubuntu 26.04
+  //    i386 packages). Ubuntu 24.04's i386 gst 1.24 + libv4l 1.26 stalls
+  //    UVC cameras (DQBUF EPIPE) in wine's capture path — classic wine
+  //    always uses this bundled stack (see applyWineEnv in the plugin).
+  //    The extracted tree IS committed (electron-builder honors .gitignore
+  //    when packaging extraFiles, so zcall-bridge/gst-i386 must stay
+  //    tracked); this step just regenerates it from the .debs.
+  // -------------------------------------------------------------------------
+  const gstDebDir = path.join(ROOT, 'scripts', 'gst-i386-debs');
+  const gstOutDir = path.join(ROOT, 'zcall-bridge', 'gst-i386');
+  if (fs.existsSync(gstDebDir)) {
+    try {
+      for (const deb of fs.readdirSync(gstDebDir)) {
+        if (!deb.endsWith('.deb')) continue;
+        execSync(`dpkg-deb -x "${path.join(gstDebDir, deb)}" "${gstOutDir}"`, {
+          cwd: ROOT, stdio: 'pipe'
+        });
+      }
+      logger.dim('gst-i386 bundle extracted from ' +
+        fs.readdirSync(gstDebDir).filter((n) => n.endsWith('.deb')).length + ' debs');
+    } catch (e) {
+      logger.warn('gst-i386 extraction failed: ' + String(e.stderr || e.message).trim().slice(-200));
+    }
   }
 
   logger.success('call-v2 runtime ready: ' + TARGET);

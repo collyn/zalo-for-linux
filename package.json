@@ -92,9 +92,6 @@
         "gstreamer1.0-pipewire",
         "gstreamer1.0-tools",
         "gstreamer1.0-x",
-        "gstreamer1.0-libav",
-        "gstreamer1.0-plugins-good",
-        "gstreamer1.0-plugins-bad",
         "libgstreamer1.0-0",
         "libgstreamer-plugins-base1.0-0",
         "xvfb",
@@ -108,13 +105,7 @@
         "libgl1:i386",
         "libpulse0:i386",
         "libasound2:i386",
-        "libv4l-0:i386",
-        "zlib1g:i386",
-        "libgstreamer1.0-0:i386",
-        "libgstreamer-plugins-base1.0-0:i386",
-        "gstreamer1.0-plugins-good:i386",
-        "gstreamer1.0-plugins-bad:i386",
-        "gstreamer1.0-libav:i386"
+        "zlib1g:i386"
       ]
     },
     "rpm": {
@@ -132,8 +123,6 @@
         "libsecret",
         "gstreamer1",
         "gstreamer1-plugins-base",
-        "gstreamer1-plugins-good",
-        "gstreamer1-plugins-bad-free",
         "gstreamer1-plugin-pipewire",
         "xorg-x11-server-Xvfb",
         "xdotool",
@@ -146,11 +135,7 @@
         "libGL(x86-32)",
         "pulseaudio-libs(x86-32)",
         "alsa-lib(x86-32)",
-        "libv4l(x86-32)",
-        "zlib(x86-32)",
-        "gstreamer1(x86-32)",
-        "gstreamer1-plugins-base(x86-32)",
-        "gstreamer1-plugins-good(x86-32)"
+        "zlib(x86-32)"
       ]
     },
     "pacman": {
@@ -167,9 +152,6 @@
         "libsecret",
         "gstreamer",
         "gst-plugins-base",
-        "gst-plugins-good",
-        "gst-plugins-bad",
-        "gst-libav",
         "gst-plugin-pipewire",
         "xorg-server-xvfb",
         "xdotool",
@@ -182,13 +164,7 @@
         "lib32-libglvnd",
         "lib32-libpulse",
         "lib32-alsa-lib",
-        "lib32-v4l-utils",
-        "lib32-zlib",
-        "lib32-gstreamer",
-        "lib32-gst-plugins-base",
-        "lib32-gst-plugins-good",
-        "lib32-gst-plugins-bad",
-        "lib32-gst-libav"
+        "lib32-zlib"
       ]
     },
     "linux": {

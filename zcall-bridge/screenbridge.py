@@ -180,6 +180,24 @@ def run():
         for k in ("LD_LIBRARY_PATH", "GST_PLUGIN_PATH", "GST_PLUGIN_SYSTEM_PATH",
                   "GST_PLUGIN_SCANNER", "GST_REGISTRY", "GI_TYPELIB_PATH"):
             env.pop(k, None)
+    elif "ZCALL_GST_BUNDLE_LIBDIR" in os.environ:
+        # Bundle gst stack: python itself runs on the HOST libs (the app
+        # strips the overrides from python's env so the jammy glib never
+        # loads into the host interpreter) — re-compose the gst child's
+        # env from the ZCALL_GST_BUNDLE_* variables for the pipeline only.
+        env = dict(os.environ)
+        lib = os.environ["ZCALL_GST_BUNDLE_LIBDIR"]
+        host_ld = os.environ.get("LD_LIBRARY_PATH")
+        env["LD_LIBRARY_PATH"] = lib + (":" + host_ld if host_ld else "")
+        env["GST_PLUGIN_PATH"] = os.environ["ZCALL_GST_BUNDLE_PLUGIN_PATH"]
+        env["GST_PLUGIN_SYSTEM_PATH"] = os.environ["ZCALL_GST_BUNDLE_PLUGIN_SYSTEM_PATH"]
+        env["GST_PLUGIN_SCANNER"] = os.environ["ZCALL_GST_BUNDLE_PLUGIN_SCANNER"]
+        if "ZCALL_GST_BUNDLE_REGISTRY" in os.environ:
+            env["GST_REGISTRY"] = os.environ["ZCALL_GST_BUNDLE_REGISTRY"]
+        for k in ("ZCALL_GST_BUNDLE_LIBDIR", "ZCALL_GST_BUNDLE_PLUGIN_PATH",
+                  "ZCALL_GST_BUNDLE_PLUGIN_SYSTEM_PATH", "ZCALL_GST_BUNDLE_PLUGIN_SCANNER",
+                  "ZCALL_GST_BUNDLE_REGISTRY"):
+            env.pop(k, None)
     os.environ["DISPLAY"] = DISPLAY2
     proc = subprocess.Popen(cmd, env=env)
     print("gst pid %d" % proc.pid, file=sys.stderr)

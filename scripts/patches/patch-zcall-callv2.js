@@ -109,14 +109,15 @@ const REPLACEMENTS = [
   // 10. Wayland screen-share bridge: preload the streamproxy shim (when the
   //     plugin set ZCALL_PROXY_SO) so ZaloCall's screen-capture reads are
   //     served from the bridge display while the app itself stays native.
-  //     Also compose the bundled-64-bit-GStreamer env (Full variants) from
-  //     ZCALL_GST_RUNTIME — ONLY for this spawn, never globally (leaking
-  //     LD_LIBRARY_PATH/GST_* into screenbridge/validate/wineboot would
-  //     break them). The ternary yields null when no bundle: Object.assign
-  //     skips null, so non-Full spawns stay byte-identical to the original.
+  //     Also compose the bundled i386-GStreamer env from ZCALL_GST_RUNTIME_I386
+  //     — ONLY for this spawn, never globally (leaking LD_LIBRARY_PATH/GST_*
+  //     into screenbridge/validate/wineboot would break them). The ternary
+  //     yields null when no bundle: Object.assign skips null. Only classic
+  //     wine is supported for calls; the 64-bit gst-runtime serves the
+  //     screen-share bridge alone (spawned by the plugin, not here).
   {
     from: '[e,"\\\\\\\\.\\\\pipe\\\\PipeZCallRecv","\\\\\\\\.\\\\pipe\\\\PipeZCallSend"]))',
-    to: '[e,"\\\\\\\\.\\\\pipe\\\\PipeZCallRecv","\\\\\\\\.\\\\pipe\\\\PipeZCallSend"],{env:Object.assign({},process.env,{LD_PRELOAD:process.env.ZCALL_PROXY_SO||process.env.LD_PRELOAD||""},process.env.ZCALL_GST_RUNTIME?{LD_LIBRARY_PATH:process.env.ZCALL_GST_RUNTIME+"/usr/lib/x86_64-linux-gnu"+(process.env.LD_LIBRARY_PATH?":"+process.env.LD_LIBRARY_PATH:""),GST_PLUGIN_PATH:process.env.ZCALL_GST_RUNTIME+"/usr/lib/x86_64-linux-gnu/gstreamer-1.0",GST_PLUGIN_SYSTEM_PATH:process.env.ZCALL_GST_RUNTIME+"/system",GST_REGISTRY:process.env.ZCALL_GST_REGISTRY||""}:null)}))',
+    to: '[e,"\\\\\\\\.\\\\pipe\\\\PipeZCallRecv","\\\\\\\\.\\\\pipe\\\\PipeZCallSend"],{env:Object.assign({},process.env,{LD_PRELOAD:process.env.ZCALL_PROXY_SO||process.env.LD_PRELOAD||""},process.env.ZCALL_GST_RUNTIME_I386?{LD_LIBRARY_PATH:process.env.ZCALL_GST_RUNTIME_I386+(process.env.LD_LIBRARY_PATH?":"+process.env.LD_LIBRARY_PATH:""),GST_PLUGIN_PATH:process.env.ZCALL_GST_RUNTIME_I386+"/gstreamer-1.0",GST_PLUGIN_SYSTEM_PATH:process.env.ZCALL_GST_RUNTIME_I386+"/system",GST_REGISTRY:process.env.ZCALL_GST_REGISTRY||""}:null)}))',
   },
   {
     from: 'e.on("data",(e=>{z(e)})),e.on("end"',
@@ -145,9 +146,53 @@ const REPLACEMENTS = [
     from: 'TK="zcall-"+Math.random().toString(36).slice(2)+Date.now().toString(36),i(process.env.ZCALL_WINE||"wine",[o.join(__dirname,"..","native","qt-call-and-cap","pipebridge.exe"),"29631","29632",TK]),A=i(process.env.ZCALL_WINE||"wine"',
     to: 'BB||(BB=!0,TK="zcall-"+Math.random().toString(36).slice(2)+Date.now().toString(36),i(process.env.ZCALL_WINE||"wine",[o.join(__dirname,"..","native","qt-call-and-cap","pipebridge.exe"),"29631","29632",TK])),A=i(process.env.ZCALL_WINE||"wine"',
   },
+  // 12. Retired v4l2loopback camera trigger — the camera fix now ships as
+  //     a bundled i386 GStreamer stack, so these entries strip the old
+  //     trigger code back out and fold the i386 GST env into the spawn.
   {
-    from: 'A.on("error",(e=>{L=!1,d.zsymb(22,"4OM2ud",["client error","6Br8Rv"],e)}))',
-    to: 'A.on("error",(e=>{L=!1,d.zsymb(22,"4OM2ud",["client error","6Br8Rv"],e)})),A.on("exit",(()=>{L=!1}))',
+    // migrate builds that carry the old spawn-time trigger version down
+    // to the exit-unlink form first (NOTE: `to` puts the exit handler
+    // FIRST — the natural error+exit order would be a prefix substring
+    // of `from` and the includes(to) guard would skip the migration);
+    // the removal entry below then strips the exit handler entirely.
+    from: 'A.on("error",(e=>{L=!1,d.zsymb(22,"4OM2ud",["client error","6Br8Rv"],e)})),A.on("exit",(()=>{L=!1,process.env.ZCALL_CAM_TRIGGER&&(()=>{try{require("fs").unlinkSync(process.env.ZCALL_CAM_TRIGGER)}catch(e){}})()})),process.env.ZCALL_CAM_TRIGGER&&(()=>{try{require("fs").writeFileSync(process.env.ZCALL_CAM_TRIGGER,"")}catch(e){}})()',
+    to: 'A.on("exit",(()=>{L=!1,process.env.ZCALL_CAM_TRIGGER&&(()=>{try{require("fs").unlinkSync(process.env.ZCALL_CAM_TRIGGER)}catch(e){}})()})),A.on("error",(e=>{L=!1,d.zsymb(22,"4OM2ud",["client error","6Br8Rv"],e)}))',
+  },
+  {
+    // strip the trigger-cleanup exit handler back out
+    remove: 'A.on("exit",(()=>{L=!1,process.env.ZCALL_CAM_TRIGGER&&(()=>{try{require("fs").unlinkSync(process.env.ZCALL_CAM_TRIGGER)}catch(e){}})()})),',
+  },
+  {
+    // strip the CT/CF/CV helpers from the module scope
+    remove: ',CV=0,CT=t=>{if(!t||!process.env.ZCALL_CAM_TRIGGER)return;try{const q=process.env.ZCALL_CAM_TRIGGER;if("request"===t.type&&"makeCall"===t.command&&t.data&&(3===t.data.type||6===t.data.type))return require("fs").writeFileSync(q,"");if("control"===t.type&&t.data&&"voip"===t.data.act_type){if("request"===t.data.act||"group_request"===t.data.act)return void(CV=t.data.type||t.data.callType||0);if("answer"===t.data.act||"group_answer"===t.data.act)return void((0===CV||3===CV||6===CV)&&require("fs").writeFileSync(q,""));if("cancel"===t.data.act||"reject"===t.data.act||"busy"===t.data.act||"timeout"===t.data.act)CV=0}if("request"===t.type&&"endCall"===t.command)require("fs").unlinkSync(q)}catch(e){}},CF=()=>{if(!process.env.ZCALL_CAM_TRIGGER)return;try{require("fs").unlinkSync(process.env.ZCALL_CAM_TRIGGER)}catch(e){}}',
+  },
+  {
+    // strip the trigger hook from the renderer->helper handler
+    remove: ',CT(t)',
+  },
+  {
+    // migrate the callState-free trigger removal back to the original form
+    from: 'else (S.webContents.send("call-update",e.command,e.data),"callState"===e.command&&e.data&&"free"===e.data.state&&CF());break;',
+    to: 'else S.webContents.send("call-update",e.command,e.data);break;',
+  },
+  {
+    // migrate the no-cross-append env: when BOTH gst branches were set
+    // the 64-bit branch overwrote the i386 LD_LIBRARY_PATH and classic
+    // wine fell back to the host 32-bit gst (camera bug on Full builds)
+    from: '[e,"\\\\\\\\.\\\\pipe\\\\PipeZCallRecv","\\\\\\\\.\\\\pipe\\\\PipeZCallSend"],{env:Object.assign({},process.env,{LD_PRELOAD:process.env.ZCALL_PROXY_SO||process.env.LD_PRELOAD||""},process.env.ZCALL_GST_RUNTIME_I386?{LD_LIBRARY_PATH:process.env.ZCALL_GST_RUNTIME_I386+(process.env.LD_LIBRARY_PATH?":"+process.env.LD_LIBRARY_PATH:""),GST_PLUGIN_PATH:process.env.ZCALL_GST_RUNTIME_I386+"/gstreamer-1.0",GST_PLUGIN_SYSTEM_PATH:process.env.ZCALL_GST_RUNTIME_I386+"/system",GST_REGISTRY:process.env.ZCALL_GST_REGISTRY||""}:null)}))',
+    to: '[e,"\\\\\\\\.\\\\pipe\\\\PipeZCallRecv","\\\\\\\\.\\\\pipe\\\\PipeZCallSend"],{env:Object.assign({},process.env,{LD_PRELOAD:process.env.ZCALL_PROXY_SO||process.env.LD_PRELOAD||""},process.env.ZCALL_GST_RUNTIME_I386?{LD_LIBRARY_PATH:process.env.ZCALL_GST_RUNTIME_I386+(process.env.LD_LIBRARY_PATH?":"+process.env.LD_LIBRARY_PATH:""),GST_PLUGIN_PATH:process.env.ZCALL_GST_RUNTIME_I386+"/gstreamer-1.0",GST_PLUGIN_SYSTEM_PATH:process.env.ZCALL_GST_RUNTIME_I386+"/system",GST_REGISTRY:process.env.ZCALL_GST_REGISTRY||""}:null)}))',
+  },
+  {
+    // migrate the cross-append env down to the i386-only form: the
+    // 64-bit call branch is retired — only classic wine is supported
+    // and the 64-bit gst-runtime now serves the screen bridge alone
+    from: '[e,"\\\\\\\\.\\\\pipe\\\\PipeZCallRecv","\\\\\\\\.\\\\pipe\\\\PipeZCallSend"],{env:Object.assign({},process.env,{LD_PRELOAD:process.env.ZCALL_PROXY_SO||process.env.LD_PRELOAD||""},process.env.ZCALL_GST_RUNTIME_I386?{LD_LIBRARY_PATH:process.env.ZCALL_GST_RUNTIME_I386+(process.env.ZCALL_GST_RUNTIME?":"+process.env.ZCALL_GST_RUNTIME+"/usr/lib/x86_64-linux-gnu":"")+(process.env.LD_LIBRARY_PATH?":"+process.env.LD_LIBRARY_PATH:""),GST_PLUGIN_PATH:process.env.ZCALL_GST_RUNTIME_I386+"/gstreamer-1.0"+(process.env.ZCALL_GST_RUNTIME?":"+process.env.ZCALL_GST_RUNTIME+"/usr/lib/x86_64-linux-gnu/gstreamer-1.0":""),GST_PLUGIN_SYSTEM_PATH:process.env.ZCALL_GST_RUNTIME_I386+"/system"+(process.env.ZCALL_GST_RUNTIME?":"+process.env.ZCALL_GST_RUNTIME+"/system":""),GST_REGISTRY:process.env.ZCALL_GST_REGISTRY||""}:null,process.env.ZCALL_GST_RUNTIME?{LD_LIBRARY_PATH:process.env.ZCALL_GST_RUNTIME+"/usr/lib/x86_64-linux-gnu"+(process.env.ZCALL_GST_RUNTIME_I386?":"+process.env.ZCALL_GST_RUNTIME_I386:"")+(process.env.LD_LIBRARY_PATH?":"+process.env.LD_LIBRARY_PATH:""),GST_PLUGIN_PATH:process.env.ZCALL_GST_RUNTIME+"/usr/lib/x86_64-linux-gnu/gstreamer-1.0"+(process.env.ZCALL_GST_RUNTIME_I386?":"+process.env.ZCALL_GST_RUNTIME_I386+"/gstreamer-1.0":""),GST_PLUGIN_SYSTEM_PATH:process.env.ZCALL_GST_RUNTIME+"/system"+(process.env.ZCALL_GST_RUNTIME_I386?":"+process.env.ZCALL_GST_RUNTIME_I386+"/system":""),GST_REGISTRY:process.env.ZCALL_GST_REGISTRY||""}:null)}))',
+    to: '[e,"\\\\\\\\.\\\\pipe\\\\PipeZCallRecv","\\\\\\\\.\\\\pipe\\\\PipeZCallSend"],{env:Object.assign({},process.env,{LD_PRELOAD:process.env.ZCALL_PROXY_SO||process.env.LD_PRELOAD||""},process.env.ZCALL_GST_RUNTIME_I386?{LD_LIBRARY_PATH:process.env.ZCALL_GST_RUNTIME_I386+(process.env.LD_LIBRARY_PATH?":"+process.env.LD_LIBRARY_PATH:""),GST_PLUGIN_PATH:process.env.ZCALL_GST_RUNTIME_I386+"/gstreamer-1.0",GST_PLUGIN_SYSTEM_PATH:process.env.ZCALL_GST_RUNTIME_I386+"/system",GST_REGISTRY:process.env.ZCALL_GST_REGISTRY||""}:null)}))',
+  },
+  {
+    // migrate the spawn env to include the bundled i386 GStreamer branch
+    from: '[e,"\\\\\\\\.\\\\pipe\\\\PipeZCallRecv","\\\\\\\\.\\\\pipe\\\\PipeZCallSend"],{env:Object.assign({},process.env,{LD_PRELOAD:process.env.ZCALL_PROXY_SO||process.env.LD_PRELOAD||""},process.env.ZCALL_GST_RUNTIME?{LD_LIBRARY_PATH:process.env.ZCALL_GST_RUNTIME+"/usr/lib/x86_64-linux-gnu"+(process.env.LD_LIBRARY_PATH?":"+process.env.LD_LIBRARY_PATH:""),GST_PLUGIN_PATH:process.env.ZCALL_GST_RUNTIME+"/usr/lib/x86_64-linux-gnu/gstreamer-1.0",GST_PLUGIN_SYSTEM_PATH:process.env.ZCALL_GST_RUNTIME+"/system",GST_REGISTRY:process.env.ZCALL_GST_REGISTRY||""}:null)}))',
+    to: '[e,"\\\\\\\\.\\\\pipe\\\\PipeZCallRecv","\\\\\\\\.\\\\pipe\\\\PipeZCallSend"],{env:Object.assign({},process.env,{LD_PRELOAD:process.env.ZCALL_PROXY_SO||process.env.LD_PRELOAD||""},process.env.ZCALL_GST_RUNTIME_I386?{LD_LIBRARY_PATH:process.env.ZCALL_GST_RUNTIME_I386+(process.env.LD_LIBRARY_PATH?":"+process.env.LD_LIBRARY_PATH:""),GST_PLUGIN_PATH:process.env.ZCALL_GST_RUNTIME_I386+"/gstreamer-1.0",GST_PLUGIN_SYSTEM_PATH:process.env.ZCALL_GST_RUNTIME_I386+"/system",GST_REGISTRY:process.env.ZCALL_GST_REGISTRY||""}:null)}))',
   },
   // 12. Queue sends while the helper is restarting instead of writing to a
   //     destroyed socket (unhandled socket error would crash the main
@@ -181,7 +226,23 @@ async function main() {
   let content = fs.readFileSync(MAIN_JS, 'utf8');
   let applied = 0;
 
-  for (const { from, to } of REPLACEMENTS) {
+  for (const entry of REPLACEMENTS) {
+    // Removal entries strip a previously-applied snippet (e.g. code from a
+    // retired feature). Idempotent — skip when the text is already gone.
+    // The regular from/to guard cannot express removals: the new text is
+    // '' which `includes` always matches.
+    if (entry.remove) {
+      const count = content.split(entry.remove).length - 1;
+      if (count === 0) {
+        logger.dim('call-v2 patch removal not needed: ' + entry.remove.slice(0, 50) + '...');
+        continue;
+      }
+      content = content.split(entry.remove).join('');
+      applied += count;
+      logger.dim(`call-v2 patch removed (x${count}): ${entry.remove.slice(0, 60)}...`);
+      continue;
+    }
+    const { from, to } = entry;
     if (content.includes(to)) {
       logger.dim('call-v2 patch already applied: ' + to.slice(0, 50) + '...');
       applied++;

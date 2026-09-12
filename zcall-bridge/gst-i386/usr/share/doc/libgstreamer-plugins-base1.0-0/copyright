@@ -1,0 +1,1469 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: Gstreamer Base Plugins 1.0
+Upstream-Contact: gstreamer-devel@lists.freedesktop.org
+Source: http://gstreamer.freedesktop.org
+Comment: This package was debianized by David I. Lehn <dlehn@debian.org> on
+ Mon, 15 Jan 2001 18:21:37 -0500.
+
+Files: *
+Copyright: Contributors to the GStreamer project
+License: LGPL-2+
+
+Files: ext/alsa/gstalsa.c
+ gst-libs/gst/audio/gstaudiocdsrc.c
+ gst-libs/gst/audio/gstaudiocdsrc.h
+ gst-libs/gst/pbutils/descriptions.c
+ gst-libs/gst/pbutils/descriptions.h
+ gst-libs/gst/pbutils/gstpluginsbaseversion.c
+ gst-libs/gst/pbutils/missing-plugins.c
+ gst-libs/gst/pbutils/missing-plugins.h
+ gst-libs/gst/pbutils/pbutils.c
+ gst-libs/gst/pbutils/pbutils.h
+ gst-libs/gst/tag/lang.c
+ gst-libs/gst/tag/licenses.c
+ gst-libs/gst/tag/mklangtables.c
+ gst-libs/gst/tag/mklicensestables.c
+ gst/subparse/gstssaparse.c
+ gst/subparse/gstssaparse.h
+ gst/subparse/tmplayerparse.c
+ gst/subparse/tmplayerparse.h
+ tests/check/elements/audiorate.c
+ tests/check/elements/playbin.c
+ tests/check/elements/subparse.c
+ tests/check/elements/textoverlay.c
+ tests/check/gst/typefindfunctions.c
+ tests/check/libs/gstlibscpp.cc
+ tests/check/libs/pbutils.c
+ tests/check/libs/rtp.c
+ tests/check/libs/tag.c
+Copyright: 2005, Tim-Philipp Müller <tim centricular net>
+  2005-2006, Tim-Philipp Müller <tim centricular net>
+  2006, Tim-Philipp Müller <tim centricular net>
+  2006-2008, Tim-Philipp Müller <tim centricular net>
+  2006-2011, Tim-Philipp Müller <tim centricular net>
+  2007, Tim-Philipp Müller <tim centricular net>
+  2009, Tim-Philipp Müller <tim centricular net>
+  2010, Tim-Philipp Müller <tim centricular net>
+  2011, Tim-Philipp Müller <tim centricular net>
+License: LGPL-2+
+
+Files: ext/cdparanoia/gstcdparanoiasrc.c
+ ext/vorbis/gstivorbisdec.c
+ ext/vorbis/gstvorbis.c
+ ext/vorbis/gstvorbisdec.h
+ ext/vorbis/gstvorbisenc.c
+ ext/vorbis/gstvorbisenc.h
+ gst-libs/gst/audio/audio.c
+ gst-libs/gst/audio/audio.h
+ gst-libs/gst/audio/gstaudiofilter.h
+ gst-libs/gst/video/gstvideofilter.h
+ gst/audiorate/gstaudiorate.c
+ gst/audiorate/gstaudiorate.h
+ gst/tcp/gsttcpclientsink.h
+ gst/tcp/gsttcpplugin.c
+ gst/videorate/gstvideorate.c
+ gst/videorate/gstvideorate.h
+ gst/videotestsrc/videotestsrc.c
+Copyright: <1999> Erik Walthinsen <omega@cse.ogi.edu>
+License: LGPL-2+
+
+Files: gst-libs/gst/riff/riff-ids.h
+ gst-libs/gst/riff/riff-media.c
+ gst-libs/gst/riff/riff-media.h
+ gst-libs/gst/riff/riff-read.c
+ gst-libs/gst/riff/riff-read.h
+ gst-libs/gst/riff/riff.c
+ gst-libs/gst/video/colorbalance.c
+ gst-libs/gst/video/colorbalance.h
+ gst-libs/gst/video/colorbalancechannel.c
+ gst-libs/gst/video/colorbalancechannel.h
+Copyright: 2003, Ronald Bultje <rbultje@ronald.bitfreak.net>
+  2004, Ronald Bultje <rbultje@ronald.bitfreak.net>
+License: LGPL-2+
+
+Files: ext/pango/gsttextoverlay.h
+ ext/vorbis/gstvorbiscommon.c
+ ext/vorbis/gstvorbiscommon.h
+ gst-libs/gst/audio/streamvolume.c
+ gst-libs/gst/audio/streamvolume.h
+ gst/playback/gststreamsynchronizer.c
+ gst/playback/gststreamsynchronizer.h
+ gst/playback/gstsubtitleoverlay.c
+ gst/playback/gstsubtitleoverlay.h
+ tests/examples/gio/giosrc-mounting.c
+Copyright: 2007-2008, Sebastian Dröge <sebastian.droege@collabora.co.uk>
+  2008, Sebastian Dröge <sebastian.droege@collabora.co.uk>
+  2009, Sebastian Dröge <sebastian.droege@collabora.co.uk>
+  2010, Sebastian Dröge <sebastian.droege@collabora.co.uk>
+  2011, Sebastian Dröge <sebastian.droege@collabora.co.uk>
+License: LGPL-2+
+
+Files: ext/alsa/gstalsasink.h
+ ext/alsa/gstalsasrc.c
+ ext/alsa/gstalsasrc.h
+ ext/ogg/gstoggaviparse.c
+ ext/ogg/gstoggdemux.c
+ ext/ogg/gstoggdemux.h
+ ext/ogg/vorbis_parse.h
+ ext/theora/gsttheoraenc.c
+ ext/theora/gsttheoraenc.h
+ gst-libs/gst/audio/gstaudioringbuffer.c
+ gst-libs/gst/rtsp/gstrtspextension.h
+ tests/check/libs/libsabi.c
+ tests/examples/playback/playback-test.c
+ tests/examples/seek/jsseek.c
+Copyright: 2004, Wim Taymans <wim@fluendo.com>
+  2005, Wim Taymans <wim@fluendo.com>
+  2006, Wim Taymans <wim@fluendo.com>
+  2007, Wim Taymans <wim@fluendo.com>
+License: LGPL-2+
+
+Files: ext/cdparanoia/gstcdparanoiasrc.h
+ gst-libs/gst/audio/gstaudiobasesink.c
+ gst-libs/gst/audio/gstaudiobasesink.h
+ gst-libs/gst/audio/gstaudiobasesrc.c
+ gst-libs/gst/audio/gstaudiobasesrc.h
+ gst-libs/gst/audio/gstaudioclock.c
+ gst-libs/gst/audio/gstaudioclock.h
+ gst-libs/gst/audio/gstaudioringbuffer.h
+ gst-libs/gst/audio/gstaudiosink.c
+ gst-libs/gst/audio/gstaudiosink.h
+ gst-libs/gst/audio/gstaudiosrc.c
+ gst-libs/gst/audio/gstaudiosrc.h
+ gst/adder/gstadder.c
+ gst/adder/gstadder.h
+Copyright: 1999, Erik Walthinsen <omega@cse.ogi.edu>
+  1999-2000, Erik Walthinsen <omega@cse.ogi.edu>
+License: LGPL-2+
+
+Files: tests/check/elements/multifdsink.c
+ tests/check/elements/multisocketsink.c
+ tests/check/elements/videorate.c
+ tests/check/pipelines/vorbisdec.c
+Copyright: 2006, Thomas Vander Stichele <thomas at apestaart dot org>
+  2007, Thomas Vander Stichele <thomas at apestaart dot org>
+License: LGPL-2+
+
+Files: gst-libs/gst/rtsp/gstrtspdefs.c
+ gst-libs/gst/rtsp/gstrtspdefs.h
+ gst-libs/gst/rtsp/gstrtspmessage.c
+ gst-libs/gst/rtsp/gstrtspmessage.h
+ gst-libs/gst/rtsp/gstrtsprange.c
+ gst-libs/gst/rtsp/gstrtsprange.h
+ gst-libs/gst/rtsp/gstrtsptransport.h
+ gst-libs/gst/rtsp/gstrtspurl.c
+ gst-libs/gst/rtsp/gstrtspurl.h
+ gst-libs/gst/sdp/gstsdp.h
+ gst-libs/gst/sdp/gstsdpmessage.c
+ gst-libs/gst/sdp/gstsdpmessage.h
+Copyright: <2005-2006> Wim Taymans <wim@fluendo.com>
+License: MIT or LGPL-2+
+
+Files: gst-libs/gst/rtsp/gstrtsp.h
+ gst-libs/gst/rtsp/gstrtspextension.c
+ tests/examples/app/appsrc-ra.c
+ tests/examples/app/appsrc-seekable.c
+ tests/examples/app/appsrc-stream.c
+ tests/examples/app/appsrc-stream2.c
+ tests/examples/seek/stepping.c
+ tests/examples/seek/stepping2.c
+Copyright: 2007, Wim Taymans <wim.taymans@gmail.com>
+  2008, Wim Taymans <wim.taymans@gmail.com>
+  2009, Wim Taymans <wim.taymans@gmail.com>
+License: LGPL-2+
+
+Files: gst-libs/gst/fft/gstfft.c
+ gst-libs/gst/fft/gstfft.h
+ gst-libs/gst/fft/gstfftf32.c
+ gst-libs/gst/fft/gstfftf32.h
+ gst-libs/gst/fft/gstfftf64.c
+ gst-libs/gst/fft/gstfftf64.h
+ gst-libs/gst/fft/gstffts16.c
+ gst-libs/gst/fft/gstffts16.h
+ gst-libs/gst/fft/gstffts32.c
+ gst-libs/gst/fft/gstffts32.h
+Copyright: <2007> Sebastian Dröge <slomo@circular-chaos.org>
+License: LGPL-2+
+
+Files: gst-libs/gst/rtp/gstrtppayloads.c
+ gst-libs/gst/rtp/gstrtppayloads.h
+ gst/playback/gstplay-enum.c
+ gst/playback/gstplay-enum.h
+ gst/playback/gstplaysink.h
+ gst/playback/gsturidecodebin.c
+ tests/examples/snapshot/snapshot.c
+Copyright: <2007> Wim Taymans <wim.taymans@gmail.com>
+License: LGPL-2+
+
+Files: gst-libs/gst/pbutils/encoding-profile.c
+ gst-libs/gst/pbutils/encoding-profile.h
+ gst-libs/gst/pbutils/encoding-target.c
+ gst-libs/gst/pbutils/encoding-target.h
+ gst/encoding/gstencodebin.c
+ gst/encoding/gstencodebin.h
+ gst/encoding/gststreamcombiner.c
+ gst/encoding/gststreamcombiner.h
+ gst/encoding/gststreamsplitter.c
+ gst/encoding/gststreamsplitter.h
+Copyright: 2009, Edward Hervey <edward.hervey@collabora.co.uk>
+  2009, Nokia Corporation
+  2009-2010, Edward Hervey <edward.hervey@collabora.co.uk>
+  2009-2010, Nokia Corporation
+  2010, Edward Hervey <edward.hervey@collabora.co.uk>
+  2010, Nokia Corporation
+License: LGPL-2+
+
+Files: sys/ximage/ximagepool.c
+ sys/ximage/ximagepool.h
+ sys/ximage/ximagesink.c
+ sys/ximage/ximagesink.h
+ sys/xvimage/xvimagepool.c
+ sys/xvimage/xvimagepool.h
+ sys/xvimage/xvimagesink.c
+ sys/xvimage/xvimagesink.h
+Copyright: <2005> Julien Moutte <julien@moutte.net>
+License: LGPL-2+
+
+Files: gst/tcp/gstmultifdsink.h
+ gst/tcp/gsttcpclientsrc.h
+ gst/tcp/gsttcpserversink.c
+ gst/tcp/gsttcpserversink.h
+ gst/tcp/gsttcpserversrc.h
+Copyright: <1999> Erik Walthinsen <omega@cse.ogi.edu>
+  <2004> Thomas Vander Stichele <thomas at apestaart dot org>
+License: LGPL-2+
+
+Files: gst-libs/gst/audio/gstaudiometa.c
+ gst-libs/gst/audio/gstaudiometa.h
+ gst-libs/gst/video/gstvideometa.c
+ gst-libs/gst/video/gstvideometa.h
+ gst-libs/gst/video/gstvideopool.c
+ gst-libs/gst/video/gstvideopool.h
+ gst-libs/gst/video/video.h
+Copyright: <2011> Wim Taymans <wim.taymans@gmail.com>
+License: LGPL-2+
+
+Files: ext/theora/gsttheora.c
+ ext/theora/gsttheoradec.c
+ ext/theora/gsttheoradec.h
+ ext/vorbis/gstvorbisdec.c
+ gst-libs/gst/tag/gstid3tag.c
+ gst-libs/gst/tag/gsttageditingprivate.h
+ gst-libs/gst/tag/gstvorbistag.c
+Copyright: 2003, Benjamin Otte <in7y118@public.uni-hamburg.de>
+  2004, Benjamin Otte <in7y118@public.uni-hamburg.de>
+License: LGPL-2+
+
+Files: gst/gio/gstgio.c
+ gst/gio/gstgiobasesink.c
+ gst/gio/gstgiobasesrc.c
+ gst/gio/gstgiosink.c
+ gst/gio/gstgiosrc.c
+ gst/gio/gstgiostreamsink.c
+ gst/gio/gstgiostreamsrc.c
+Copyright: 2007, Rene Stadler <mail@renestadler.de>
+  2007, Sebastian Dröge <sebastian.droege@collabora.co.uk>
+  2007-2009, Sebastian Dröge <sebastian.droege@collabora.co.uk>
+License: LGPL-2+
+
+Files: gst/gio/gstgiobasesink.h
+ gst/gio/gstgiobasesrc.h
+ gst/gio/gstgiosink.h
+ gst/gio/gstgiosrc.h
+ gst/gio/gstgiostreamsink.h
+ gst/gio/gstgiostreamsrc.h
+Copyright: 2007, Rene Stadler <mail@renestadler.de>
+  2007, Sebastian Dröge <slomo@circular-chaos.org>
+  2007-2009, Sebastian Dröge <slomo@circular-chaos.org>
+License: LGPL-2+
+
+Files: gst-libs/gst/tag/gstexiftag.c
+ gst-libs/gst/tag/gsttageditingprivate.c
+ gst-libs/gst/tag/xmpwriter.c
+ gst-libs/gst/tag/xmpwriter.h
+ tests/check/elements/appsrc.c
+ tests/check/libs/xmpwriter.c
+ tests/check/pipelines/capsfilter-renegotiation.c
+Copyright: 2010, Thiago Santos <thiago.sousa.santos@collabora.co.uk>
+  2011, Thiago Santos <thiago.sousa.santos@collabora.co.uk>
+License: LGPL-2+
+
+Files: tests/check/elements/adder.c
+ tests/check/elements/audiotestsrc.c
+ tests/check/elements/volume.c
+ tests/check/elements/vorbisdec.c
+ tests/check/elements/vorbistag.c
+ tests/check/generic/states.c
+Copyright: <2005> Thomas Vander Stichele <thomas at apestaart dot org>
+License: LGPL-2+
+
+Files: ext/ogg/gstoggstream.h
+ gst-libs/gst/app/gstappsink.h
+ gst-libs/gst/app/gstappsrc.h
+ gst-libs/gst/glib-compat-private.h
+ gst/app/gstapp.c
+Copyright: 2005, David Schleef <ds@schleef.org>
+  2007, David Schleef <ds@schleef.org>
+  2009, David Schleef <ds@schleef.org>
+  2010, David Schleef <ds@schleef.org>
+License: LGPL-2+
+
+Files: gst/tcp/gstmultihandlesink.h
+ gst/tcp/gstmultisocketsink.h
+ gst/tcp/gsttcpclientsink.c
+ gst/tcp/gsttcpclientsrc.c
+ gst/tcp/gsttcpserversrc.c
+Copyright: <1999> Erik Walthinsen <omega@cse.ogi.edu>
+  <2004> Thomas Vander Stichele <thomas at apestaart dot org>
+  <2011> Collabora Ltd
+License: LGPL-2+
+
+Files: gst-libs/gst/pbutils/gstdiscoverer.c
+ gst-libs/gst/pbutils/gstdiscoverer.h
+ gst-libs/gst/pbutils/pbutils-private.h
+ tests/examples/encoding/encoding.c
+ tools/gst-discoverer.c
+Copyright: 2009, Edward Hervey <edward.hervey@collabora.co.uk>
+  2010, Edward Hervey <edward.hervey@collabora.co.uk>
+License: LGPL-2+
+
+Files: ext/pango/gstclockoverlay.c
+ ext/pango/gstclockoverlay.h
+ ext/pango/gsttimeoverlay.c
+ ext/pango/gsttimeoverlay.h
+Copyright: <1999> Erik Walthinsen <omega@cse.ogi.edu>
+  <2005> Tim-Philipp Müller <tim@centricular.net>
+License: LGPL-2+
+
+Files: gst/playback/gstplaysinkaudioconvert.c
+ gst/playback/gstplaysinkaudioconvert.h
+ gst/playback/gstplaysinkvideoconvert.c
+ gst/playback/gstplaysinkvideoconvert.h
+Copyright: <2011> Sebastian Dröge <sebastian.droege@collabora.co.uk>
+License: LGPL-2+
+
+Files: gst/audioconvert/plugin.c
+ tests/check/pipelines/theoraenc.c
+ tests/check/pipelines/vorbisenc.c
+Copyright: 2004, Andy Wingo <wingo at pobox.com>
+  2006, Andy Wingo <wingo at pobox.com>
+License: LGPL-2+
+
+Files: ext/vorbis/gstvorbisdeclib.c
+ ext/vorbis/gstvorbisdeclib.h
+ gst-libs/gst/audio/gstaudioencoder.c
+ gst-libs/gst/audio/gstaudioencoder.h
+Copyright: 2010, Mark Nauwelaerts <mark.nauwelaerts@collabora.co.uk>
+  2010, Nokia Corporation.
+  2011, Mark Nauwelaerts <mark.nauwelaerts@collabora.co.uk>
+  2011, Nokia Corporation.
+License: LGPL-2+
+
+Files: tests/check/libs/fft.c
+ tests/check/pipelines/gio.c
+Copyright: 2007, Sebastian Dröge <slomo@circular-chaos.org>
+License: LGPL-2+
+
+Files: gst/audiotestsrc/gstaudiotestsrc.c
+ gst/audiotestsrc/gstaudiotestsrc.h
+ tests/check/libs/discoverer.c
+ tests/examples/fft/fftrange.c
+Copyright: 2005, Stefan Kost <ensonic@users.sf.net>
+  2011, Stefan Kost <ensonic@users.sf.net>
+License: LGPL-2+
+
+Files: gst/subparse/gstsubparse.h
+ gst/videotestsrc/gstvideotestsrc.c
+ gst/videotestsrc/gstvideotestsrc.h
+Copyright: <1999> Erik Walthinsen <omega@cse.ogi.edu>
+  <2002> David A. Schleef <ds@schleef.org>
+License: LGPL-2+
+
+Files: ext/theora/gsttheoraparse.c
+ ext/theora/gsttheoraparse.h
+ ext/vorbis/gstvorbisparse.c
+Copyright: 2006, Andy Wingo <wingo@pobox.com>
+  <2004> Thomas Vander Stichele <thomas at apestaart dot org>
+License: LGPL-2+
+
+Files: tests/examples/dynamic/sprinkle.c
+ tests/examples/dynamic/sprinkle2.c
+ tests/examples/dynamic/sprinkle3.c
+Copyright: <2009> Wim Taymans <wim dot taymans at gmail dot com>
+License: LGPL-2+
+
+Files: ext/alsa/gstalsa.h
+ ext/alsa/gstalsaplugin.c
+Copyright: 2001, CodeFactory AB
+  2001, Thomas Nyberg <thomas@codefactory.se>
+  2001-2002, Andy Wingo <apwingo@eos.ncsu.edu>
+  2003, Benjamin Otte <in7y118@public.uni-hamburg.de>
+License: LGPL-2+
+
+Files: gst/tcp/gstmultihandlesink.c
+ gst/tcp/gstmultisocketsink.c
+Copyright: 2006, Wim Taymans <wim at fluendo dot com>
+  <1999> Erik Walthinsen <omega@cse.ogi.edu>
+  <2004> Thomas Vander Stichele <thomas at apestaart dot org>
+  <2011> Collabora Ltd
+License: LGPL-2+
+
+Files: sys/ximage/ximage.c
+ sys/xvimage/xvimage.c
+Copyright: <2003> Julien Moutte <julien@moutte.net>
+License: LGPL-2+
+
+Files: gst-libs/gst/video/gstvideosink.c
+ gst-libs/gst/video/gstvideosink.h
+Copyright: <2003> Julien Moutte <julien@moutte.net>
+  <2009> Tim-Philipp Müller <tim centricular net>
+License: LGPL-2+
+
+Files: ext/vorbis/gstvorbisparse.h
+ tests/examples/audio/volume.c
+Copyright: <2004> Thomas Vander Stichele <thomas at apestaart dot org>
+License: LGPL-2+
+
+Files: gst-libs/gst/rtp/gstrtpbasedepayload.h
+ gst-libs/gst/rtp/gstrtpbuffer.h
+Copyright: <2005> Philippe Khalaf <burger@speedy.org>
+License: LGPL-2+
+
+Files: gst-libs/gst/rtp/gstrtpbasepayload.c
+ gst-libs/gst/rtp/gstrtpbasepayload.h
+Copyright: <2005> Wim Taymans <wim@fluendo.com>
+License: LGPL-2+
+
+Files: gst-libs/gst/rtp/gstrtpbaseaudiopayload.c
+ gst-libs/gst/rtp/gstrtpbaseaudiopayload.h
+Copyright: <2006> Philippe Khalaf <philippe.kalaf@collabora.co.uk>
+License: LGPL-2+
+
+Files: gst-libs/gst/rtp/gstrtcpbuffer.c
+ gst-libs/gst/rtp/gstrtcpbuffer.h
+Copyright: <2007> Wim Taymans <wim@fluendo.com>
+License: LGPL-2+
+
+Files: tests/check/elements/encodebin.c
+ tests/check/libs/profile.c
+Copyright: <2009> Edward Hervey <edward.hervey@collabora.co.uk>
+License: LGPL-2+
+
+Files: tests/examples/overlay/qtgv-videooverlay.cpp
+ tests/examples/overlay/qtgv-videooverlay.h
+Copyright: <2010> Alexander Bokovoy <ab@samba.org>
+License: LGPL-2+
+
+Files: tests/examples/encoding/gstcapslist.c
+ tests/examples/encoding/gstcapslist.h
+Copyright: <2010> Edward Hervey <edward.hervey@collabora.co.uk>
+License: LGPL-2+
+
+Files: tests/examples/overlay/gtk-videooverlay.c
+ tests/examples/overlay/qt-videooverlay.cpp
+Copyright: <2010> Stefan Kost <ensonic@users.sf.net>
+License: LGPL-2+
+
+Files: gst-libs/gst/pbutils/codec-utils.c
+ gst-libs/gst/pbutils/codec-utils.h
+Copyright: 2010, Arun Raghavan <arun.raghavan@collabora.co.uk>
+License: LGPL-2+
+
+Files: gst-libs/gst/app/gstappsink.c
+ gst-libs/gst/app/gstappsrc.c
+Copyright: 2007, David Schleef <ds@schleef.org>
+  2008, Wim Taymans <wim.taymans@gmail.com>
+License: LGPL-2+
+
+Files: gst-libs/gst/audio/gstaudiodecoder.c
+ gst-libs/gst/audio/gstaudiodecoder.h
+Copyright: 2009, Igalia S.L
+  2011, Mark Nauwelaerts <mark.nauwelaerts@collabora.co.uk>
+  2011, Nokia Corporation.
+License: LGPL-2+
+
+Files: gst-libs/gst/audio/gstaudioiec61937.c
+ gst-libs/gst/audio/gstaudioiec61937.h
+Copyright: 2011, Intel Corporation
+License: LGPL-2+
+
+Files: gst-libs/gst/tag/gsttagdemux.c
+ gst-libs/gst/tag/gsttagdemux.h
+Copyright: 2005, Jan Schmidt <thaytan@mad.scientist.com>
+  2006, Tim-Philipp Müller <tim centricular net>
+  2006-2007, Tim-Philipp Müller <tim centricular net>
+License: LGPL-2+
+
+Files: tests/check/libs/navigation.c
+Copyright: 2007, Jan Schmidt <thaytan@noraisin.net>
+  2009, Jan Schmidt <thaytan@noraisin.net>
+License: LGPL-2+
+
+Files: gst/subparse/mpl2parse.c
+ gst/subparse/mpl2parse.h
+Copyright: 2006, Kamil Pawlowski <kamilpe gmail com>
+License: LGPL-2+
+
+Files: ext/ogg/gstogmparse.c
+Copyright: 2003-2004, Ronald Bultje <rbultje@ronald.bitfreak.net>
+  2004, Ronald Bultje <rbultje@ronald.bitfreak.net>
+  2005-2006, Tim-Philipp Müller <tim centricular net>
+  2006, Tim-Philipp Müller <tim centricular net>
+License: LGPL-2+
+
+Files: gst-libs/gst/pbutils/install-plugins.c
+ gst-libs/gst/pbutils/install-plugins.h
+Copyright: 2006, Ryan Lortie <desrt desrt ca>
+  2007, Tim-Philipp Müller <tim centricular net>
+License: LGPL-2+
+
+Files: tests/check/libs/audio.c
+Copyright: 2006, Tim-Philipp Müller <tim centricular net>
+  2010, Sebastian Dröge <sebastian.droege@collabora.co.uk>
+  2011, Sebastian Dröge <sebastian.droege@collabora.co.uk>
+License: LGPL-2+
+
+Files: ext/ogg/gstoggmux.c
+ ext/ogg/gstoggmux.h
+Copyright: 2004, Wim Taymans <wim@fluendo.com>
+  2006, Thomas Vander Stichele <thomas at apestaart dot org>
+License: LGPL-2+
+
+Files: gst/playback/gstplaysink.c
+Copyright: ((GstPlayChain *))
+  <2007> Wim Taymans <wim.taymans@gmail.com>
+  <2011> Sebastian Dröge <sebastian.droege@collabora.co.uk>
+License: LGPL-2+
+
+Files: gst-libs/gst/video/gstvideofilter.c
+Copyright: <1999> Erik Walthinsen <omega@cse.ogi.edu>
+  <2003> David Schleef <ds@schleef.org>
+License: LGPL-2+
+
+Files: ext/pango/gstbasetextoverlay.c
+Copyright: <1999> Erik Walthinsen <omega@cse.ogi.edu>
+  <2003> David Schleef <ds@schleef.org>
+  <2006-2008> Tim-Philipp Müller <tim centricular net>
+  <2006> Julien Moutte <julien@moutte.net>
+  <2006> Zeeshan Ali <zeeshan.ali@nokia.com>
+  <2009> Young-Ho Cha <ganadist@gmail.com>
+License: LGPL-2+
+
+Files: ext/pango/gsttextoverlay.c
+Copyright: <1999> Erik Walthinsen <omega@cse.ogi.edu>
+  <2003> David Schleef <ds@schleef.org>
+  <2006-2008> Tim-Philipp Müller <tim centricular net>
+  <2006> Julien Moutte <julien@moutte.net>
+  <2006> Zeeshan Ali <zeeshan.ali@nokia.com>
+  <2009> Young-Ho Cha <ganadist@gmail.com>
+  <2011> Sebastian Dröge <sebastian.droege@collabora.co.uk>
+License: LGPL-2+
+
+Files: gst-libs/gst/audio/gstaudiofilter.c
+Copyright: <1999> Erik Walthinsen <omega@cse.ogi.edu>
+  <2003> David Schleef <ds@schleef.org>
+  <2007> Tim-Philipp Müller <tim centricular net>
+License: LGPL-2+
+
+Files: ext/pango/gsttextrender.c
+Copyright: <1999> Erik Walthinsen <omega@cse.ogi.edu>
+  <2003> David Schleef <ds@schleef.org>
+  <2009> Young-Ho Cha <ganadist@gmail.com>
+License: LGPL-2+
+
+Files: gst/tcp/gstmultifdsink.c
+Copyright: 2006, Wim Taymans <wim at fluendo dot com>
+  <1999> Erik Walthinsen <omega@cse.ogi.edu>
+  <2004> Thomas Vander Stichele <thomas at apestaart dot org>
+License: LGPL-2+
+
+Files: gst/audioresample/gstaudioresample.h
+Copyright: <1999> Erik Walthinsen <omega@cse.ogi.edu>
+  <2007-2008> Sebastian Dröge <sebastian.droege@collabora.co.uk>
+License: LGPL-2+
+
+Files: gst-libs/gst/video/video.c
+Copyright: 2007, David A. Schleef <ds@schleef.org>
+  <1999> Erik Walthinsen <omega@cse.ogi.edu>
+License: LGPL-2+
+
+Files: gst/subparse/gstsubparse.c
+Copyright: 2004, Ronald S. Bultje <rbultje@ronald.bitfreak.net>
+  2006, Tim-Philipp Müller <tim centricular net>
+  <1999> Erik Walthinsen <omega@cse.ogi.edu>
+License: LGPL-2+
+
+Files: gst/volume/gstvolume.h
+Copyright: 2010, Sebastian Dröge <sebastian.droege@collabora.co.uk>
+  <1999> Erik Walthinsen <omega@cse.ogi.edu>
+License: LGPL-2+
+
+Files: gst/videotestsrc/videotestsrc.h
+Copyright: <2003> David A. Schleef <ds@schleef.org>
+License: LGPL-2+
+
+Files: tests/check/libs/video.c
+Copyright: <2003> David A. Schleef <ds@schleef.org>
+  <2006> Jan Schmidt <thaytan@mad.scientist.com>
+  <2008,2011> Tim-Philipp Müller <tim centricular net>
+  <2012> Collabora Ltd. <tim.muller@collabora.co.uk>
+License: LGPL-2+
+
+Files: gst-libs/gst/rtp/gstrtpbasedepayload.c
+Copyright: <2005> Nokia Corporation <kai.vehmanen@nokia.com>
+  <2005> Philippe Khalaf <burger@speedy.org>
+License: LGPL-2+
+
+Files: gst-libs/gst/rtp/gstrtpbuffer.c
+Copyright: <2005> Philippe Khalaf <burger@speedy.org>
+  <2006> Wim Taymans <wim@fluendo.com>
+License: LGPL-2+
+
+Files: tests/check/elements/audioresample.c
+Copyright: <2005> Thomas Vander Stichele <thomas at apestaart dot org>
+  <2006> Tim-Philipp Müller <tim at centricular net>
+License: LGPL-2+
+
+Files: tests/check/elements/videotestsrc.c
+Copyright: <2005> Thomas Vander Stichele <thomas at apestaart dot org>
+  <2006> Tim-Philipp Müller <tim centricular net>
+License: LGPL-2+
+
+Files: tests/check/elements/audioconvert.c
+Copyright: <2005> Thomas Vander Stichele <thomas at apestaart dot org>
+  <2007> Tim-Philipp Müller <tim centricular net>
+License: LGPL-2+
+
+Files: tests/check/libs/audiocdsrc.c
+Copyright: <2005> Tim-Philipp Müller <tim centricular net>
+License: LGPL-2+
+
+Files: tests/check/generic/clock-selection.c
+Copyright: <2005> Wim Taymans <wim at fluendo dot com>
+License: LGPL-2+
+
+Files: gst/playback/gstdecodebin2.c
+Copyright: <2006> Edward Hervey <edward@fluendo.com>
+  <2009> Sebastian Dröge <sebastian.droege@collabora.co.uk>
+  <2011> Hewlett-Packard Development Company, L.P
+License: LGPL-2+
+
+Files: ext/vorbis/gstvorbistag.h
+Copyright: <2006> James Livingston <doclivingston@gmail.com>
+License: LGPL-2+
+
+Files: tests/examples/dynamic/addstream.c
+Copyright: <2007> Wim Taymans <wim dot taymans at gmail dot com>
+License: LGPL-2+
+
+Files: gst/playback/gstplaybin2.c
+Copyright: <2007> Wim Taymans <wim.taymans@gmail.com>
+  <2011> Sebastian Dröge <sebastian.droege@collabora.co.uk>
+License: LGPL-2+
+
+Files: tests/examples/dynamic/codec-select.c
+Copyright: <2008> Wim Taymans <wim dot taymans at gmail dot com>
+License: LGPL-2+
+
+Files: tests/check/elements/videoscale.c
+Copyright: <2009-2010> Sebastian Dröge <sebastian.droege@collabora.co.uk>
+License: LGPL-2+
+
+Files: gst/playback/gstrawcaps.h
+Copyright: <2009> Sebastian Dröge <sebastian.droege@collabora.co.uk>
+License: LGPL-2+
+
+Files: gst/encoding/gstsmartencoder.h
+Copyright: <2010> Edward Hervey <bilboed@bilboed.com>
+License: LGPL-2+
+
+Files: gst/encoding/gstsmartencoder.c
+Copyright: <2010> Edward Hervey <bilboed@gmail.com>
+License: LGPL-2+
+
+Files: gst/playback/gstplaysinkconvertbin.h
+Copyright: <2011> Sebastian Dröge <sebastian.droege@collabora.co.uk>
+  <2011> Vincent Penquerc'h <vincent.penquerch@collabora.co.uk>
+License: LGPL-2+
+
+Files: gst/playback/gstplaysinkconvertbin.c
+Copyright: <2011> Sebastian Dröge <sebastian.droege@collabora.co.uk>
+  <2011> Vincent Penquerch <vincent.penquerch@collabora.co.uk>
+License: LGPL-2+
+
+Files: tests/check/libs/rtsp.c
+Copyright: 2010, Andy Wingo <wingo@oblong.com>
+License: LGPL-2+
+
+Files: tests/check/pipelines/simple-launch-lines.c
+Copyright: 2005, Andy Wingo <wingo@pobox.com>
+License: LGPL-2+
+
+Files: gst/volume/gstvolume.c
+Copyright: 1999-2001, Erik Walthinsen <omega@cse.ogi.edu>
+  2005, Andy Wingo <wingo@pobox.com>
+  2010, Sebastian Dröge <sebastian.droege@collabora.co.uk>
+License: LGPL-2+
+
+Files: tests/check/elements/appsink.c
+Copyright: 2009, Axis Communications AB, LUND, SWEDEN
+License: LGPL-2+
+
+Files: gst/typefind/gsttypefindfunctions.c
+Copyright: 2003, Benjamin Otte <in7y118@public.uni-hamburg.de>
+  2005-2009, Tim-Philipp Müller <tim centricular net>
+  2009, Sebastian Dröge <sebastian.droege@collabora.co.uk>
+License: LGPL-2+
+
+Files: gst/audioconvert/gstaudioconvert.c
+Copyright: 2003, Benjamin Otte <in7y118@public.uni-hamburg.de>
+  2005, Thomas Vander Stichele <thomas at apestaart dot org>
+  2011, Wim Taymans <wim.taymans at gmail dot com>
+License: LGPL-2+
+
+Files: gst-libs/gst/tag/tag.h
+Copyright: 2003, Benjamin Otte <in7y118@public.uni-hamburg.de>
+  2006-2011, Tim-Philipp Müller <tim centricular net>
+License: LGPL-2+
+
+Files: ext/libvisual/visual.c
+Copyright: 2004, Benjamin Otte <otte@gnome.org>
+License: LGPL-2+
+
+Files: gst-libs/gst/video/convertframe.c
+Copyright: 2005, Tim-Philipp Müller <tim centricular net>
+  2010, Brandon Lewis <brandon.lewis@collabora.co.uk>
+  2010, Edward Hervey <edward.hervey@collabora.co.uk>
+License: LGPL-2+
+
+Files: gst-libs/gst/tag/gsttagmux.c
+Copyright: 2006, Christophe Fergeau <teuf@gnome.org>
+  2006, Sebastian Dröge <slomo@circular-chaos.org>
+  2006, Tim-Philipp Müller <tim centricular net>
+  2009, Pioneers of the Inevitable <songbird@songbirdnest.com>
+License: LGPL-2+
+
+Files: gst-libs/gst/tag/gsttagmux.h
+Copyright: 2006, Christophe Fergeau <teuf@gnome.org>
+  2006,2011, Tim-Philipp Müller <tim centricular net>
+  2009, Pioneers of the Inevitable <songbird@songbirdnest.com>
+License: LGPL-2+
+
+Files: gst-libs/gst/pbutils/gstdiscoverer-types.c
+Copyright: 2010, Collabora Multimedia
+License: LGPL-2+
+
+Files: gst/audioresample/gstaudioresample.c
+Copyright: 1999, Erik Walthinsen <omega@cse.ogi.edu>
+  2003-2004, David A. Schleef <ds@schleef.org>
+  2007-2008, Sebastian Dröge <sebastian.droege@collabora.co.uk>
+License: LGPL-2+
+
+Files: ext/ogg/gstoggstream.c
+Copyright: 2006, Tim-Philipp Müller <tim centricular net>
+  2009, David Schleef <ds@schleef.org>
+License: LGPL-2+
+
+Files: tests/check/elements/decodebin.c
+Copyright: 2006, Tim-Philipp Müller <tim centricular net>
+  2011, Hewlett-Packard Development Company, L.P
+License: LGPL-2+
+
+Files: tests/check/pipelines/oggmux.c
+Copyright: 2006, James Livingston <doclivingston at gmail.com>
+License: LGPL-2+
+
+Files: ext/vorbis/gstvorbistag.c
+Copyright: 2006, James Livingston <doclivingston@gmail.com>
+License: LGPL-2+
+
+Files: gst-libs/gst/tag/id3v2.h
+Copyright: 2005, Jan Schmidt <thaytan@mad.scientist.com>
+License: LGPL-2+
+
+Files: gst-libs/gst/tag/id3v2.c
+Copyright: 2002-2003, Scott Wheeler <wheeler@kde.org> (portions from taglib)
+  2005, Jan Schmidt <thaytan@mad.scientist.com>
+License: LGPL-2+
+
+Files: gst-libs/gst/tag/id3v2frames.c
+Copyright: 2002-2003, Scott Wheeler <wheeler@kde.org> (portions from taglib)
+  2005, Jan Schmidt <thaytan@mad.scientist.com>
+  2006-2008, Tim-Philipp Müller <tim centricular net>
+License: LGPL-2+
+
+Files: gst-libs/gst/video/videooverlay.h
+Copyright: 2003, Julien Moutte <julien@moutte.net>
+  2003, Ronald Bultje <rbultje@ronald.bitfreak.net>
+  2011, Tim-Philipp Müller <tim@centricular.net>
+License: LGPL-2+
+
+Files: tests/check/pipelines/basetime.c
+Copyright: 2009, Maemo Multimedia <multimedia at maemo dot org>
+License: LGPL-2+
+
+Files: ext/ogg/gstoggparse.c
+Copyright: 2005, Michael Smith <msmith@fluendo.com>
+License: LGPL-2+
+
+Files: gst-libs/gst/video/videoorientation.h
+Copyright: 2006, Nokia <stefan.kost@nokia.com
+License: LGPL-2+
+
+Files: gst-libs/gst/video/videoorientation.c
+Copyright: 2006, Nokia <stefan.kost@nokia.com>
+License: LGPL-2+
+
+Files: gst-libs/gst/video/videooverlay.c
+Copyright: 2003, Ronald Bultje <rbultje@ronald.bitfreak.net>
+  2011, Tim-Philipp Müller <tim@centricular.net>
+License: LGPL-2+
+
+Files: gst-libs/gst/tag/tags.c
+Copyright: 2005, Ross Burton <ross@burtonini.com>
+  2006-2008, Tim-Philipp Müller <tim centricular net>
+License: LGPL-2+
+
+Files: gst-libs/gst/tag/gstxmptag.c
+Copyright: 2010, Stefan Kost <stefan.kost@nokia.com>
+  2010, Thiago Santos <thiago.sousa.santos@collabora.co.uk>
+License: LGPL-2+
+
+Files: tests/examples/audio/audiomix.c
+Copyright: 2011, Stefan Sauer <ensonic@users.sf.net>
+License: LGPL-2+
+
+Files: gst/subparse/qttextparse.h
+Copyright: 2009, Thiago Santos <thiago.sousa.santos collabora co uk>
+License: LGPL-2+
+
+Files: gst/subparse/qttextparse.c
+Copyright: 2009, Thiago Santos <thiago.sousa.santos collabora co uk>
+License: LGPL-2+
+
+Files: tests/check/elements/libvisual.c
+Copyright: 2007, Tim-Philipp Müller <tim at centricular net>
+License: LGPL-2+
+
+Files: ext/alsa/gstalsasink.c
+Copyright: 2005, Wim Taymans <wim@fluendo.com>
+  2006, Tim-Philipp Müller <tim centricular net>
+License: LGPL-2+
+
+Files: tests/examples/playrec/playrec.c
+Copyright: 2010, Wim Taymans <wim.taymans@collabora.co.uk>
+License: LGPL-2+
+
+Files: gst/subparse/samiparse.c
+Copyright: 2006, Young-Ho Cha <ganadist at chollian net>
+License: LGPL-2+
+
+Files: gst/subparse/samiparse.h
+Copyright: 2006, Young-Ho Cha <ganadist chollian net>
+License: LGPL-2+
+
+Files: gst-libs/gst/rtsp/gstrtspconnection.h
+Copyright: <2005,2009> Wim Taymans <wim.taymans@gmail.com>
+License: MIT or LGPL-2+
+
+Files: gst-libs/gst/rtsp/gstrtsptransport.c
+Copyright: <2005-2007> Wim Taymans <wim@fluendo.com>
+License: MIT or LGPL-2+
+
+Files: gst-libs/gst/rtsp/gstrtspconnection.c
+Copyright: <2005-2009> Wim Taymans <wim.taymans@gmail.com>
+License: MIT or LGPL-2+
+
+Files: po/af.po
+       po/az.po
+       po/ca.po
+       po/cs.po
+       po/el.po
+       po/es.po
+       po/hr.po
+       po/id.po
+       po/ja.po
+       po/lv.po
+       po/nb.po
+       po/nl.po
+       po/ru.po
+       po/sk.po
+       po/tr.po
+       po/zh_CN.po
+Copyright: 2000-2025, GStreamer developers
+License: public-domain
+
+Files: gst-libs/gst/tag/lang-tables.dat
+Copyright: 2000-2025, GStreamer developers
+License: LGPL-2.1+
+
+Files: gst-libs/gst/fft/kiss_fft_f32.c
+       gst-libs/gst/fft/kiss_fft_f32.h
+       gst-libs/gst/fft/kiss_fft_f64.c
+       gst-libs/gst/fft/kiss_fft_f64.h
+       gst-libs/gst/fft/_kiss_fft_guts_f32.h
+       gst-libs/gst/fft/_kiss_fft_guts_f64.h
+       gst-libs/gst/fft/_kiss_fft_guts_s16.h
+       gst-libs/gst/fft/_kiss_fft_guts_s32.h
+       gst-libs/gst/fft/kiss_fftr_f32.c
+       gst-libs/gst/fft/kiss_fftr_f32.h
+       gst-libs/gst/fft/kiss_fftr_f64.c
+       gst-libs/gst/fft/kiss_fftr_f64.h
+       gst-libs/gst/fft/kiss_fftr_s16.c
+       gst-libs/gst/fft/kiss_fftr_s16.h
+       gst-libs/gst/fft/kiss_fftr_s32.c
+       gst-libs/gst/fft/kiss_fftr_s32.h
+       gst-libs/gst/fft/kiss_fft_s16.c
+       gst-libs/gst/fft/kiss_fft_s16.h
+       gst-libs/gst/fft/kiss_fft_s32.c
+       gst-libs/gst/fft/kiss_fft_s32.h
+Copyright: 2003-2004, Mark Borgerding
+License: BSD-3-clause
+
+Files: ext/ogg/vorbis_parse.c
+Copyright: 2003 Commonwealth Scientific and Industrial Research
+           Organisation (CSIRO) Australia
+License: BSD-3-clause
+
+License: BSD-3-clause
+ Copyright (c) The Regents of the University of California.
+ All rights reserved.
+ .
+ Redistribution and use in source and binary forms, with or without
+ modification, are permitted provided that the following conditions
+ are met:
+ 1. Redistributions of source code must retain the above copyright
+    notice, this list of conditions and the following disclaimer.
+ 2. Redistributions in binary form must reproduce the above copyright
+    notice, this list of conditions and the following disclaimer in the
+    documentation and/or other materials provided with the distribution.
+ 3. Neither the name of the University nor the names of its contributors
+    may be used to endorse or promote products derived from this software
+    without specific prior written permission.
+ .
+ THIS SOFTWARE IS PROVIDED BY THE REGENTS AND CONTRIBUTORS ``AS IS'' AND
+ ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ ARE DISCLAIMED.  IN NO EVENT SHALL THE REGENTS OR CONTRIBUTORS BE LIABLE
+ FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+ DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+ OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+ HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+ LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+ OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+ SUCH DAMAGE.
+
+License: CC-BY-SA-4.0
+ CC Attribution-ShareAlike http://creativecommons.org/licenses/by-sa/4.0/
+ .
+ Attribution-ShareAlike 4.0 International
+ .
+ =======================================================================
+ .
+ Creative Commons Corporation ("Creative Commons") is not a law firm and
+ does not provide legal services or legal advice. Distribution of
+ Creative Commons public licenses does not create a lawyer-client or
+ other relationship. Creative Commons makes its licenses and related
+ information available on an "as-is" basis. Creative Commons gives no
+ warranties regarding its licenses, any material licensed under their
+ terms and conditions, or any related information. Creative Commons
+ disclaims all liability for damages resulting from their use to the
+ fullest extent possible.
+ .
+ Using Creative Commons Public Licenses
+ .
+ Creative Commons public licenses provide a standard set of terms and
+ conditions that creators and other rights holders may use to share
+ original works of authorship and other material subject to copyright
+ and certain other rights specified in the public license below. The
+ following considerations are for informational purposes only, are not
+ exhaustive, and do not form part of our licenses.
+ .
+     Considerations for licensors: Our public licenses are
+     intended for use by those authorized to give the public
+     permission to use material in ways otherwise restricted by
+     copyright and certain other rights. Our licenses are
+     irrevocable. Licensors should read and understand the terms
+     and conditions of the license they choose before applying it.
+     Licensors should also secure all rights necessary before
+     applying our licenses so that the public can reuse the
+     material as expected. Licensors should clearly mark any
+     material not subject to the license. This includes other CC-
+     licensed material, or material used under an exception or
+     limitation to copyright. More considerations for licensors:
+     wiki.creativecommons.org/Considerations_for_licensors
+ .
+     Considerations for the public: By using one of our public
+     licenses, a licensor grants the public permission to use the
+     licensed material under specified terms and conditions. If
+     the licensor's permission is not necessary for any reason--for
+     example, because of any applicable exception or limitation to
+     copyright--then that use is not regulated by the license. Our
+     licenses grant only permissions under copyright and certain
+     other rights that a licensor has authority to grant. Use of
+     the licensed material may still be restricted for other
+     reasons, including because others have copyright or other
+     rights in the material. A licensor may make special requests,
+     such as asking that all changes be marked or described.
+     Although not required by our licenses, you are encouraged to
+     respect those requests where reasonable. More_considerations
+     for the public:
+     wiki.creativecommons.org/Considerations_for_licensees
+ .
+ =======================================================================
+ .
+ Creative Commons Attribution-ShareAlike 4.0 International Public
+ License
+ .
+ By exercising the Licensed Rights (defined below), You accept and agree
+ to be bound by the terms and conditions of this Creative Commons
+ Attribution-ShareAlike 4.0 International Public License ("Public
+ License"). To the extent this Public License may be interpreted as a
+ contract, You are granted the Licensed Rights in consideration of Your
+ acceptance of these terms and conditions, and the Licensor grants You
+ such rights in consideration of benefits the Licensor receives from
+ making the Licensed Material available under these terms and
+ conditions.
+ .
+ .
+ Section 1 -- Definitions.
+ .
+  a. Adapted Material means material subject to Copyright and Similar
+     Rights that is derived from or based upon the Licensed Material
+     and in which the Licensed Material is translated, altered,
+     arranged, transformed, or otherwise modified in a manner requiring
+     permission under the Copyright and Similar Rights held by the
+     Licensor. For purposes of this Public License, where the Licensed
+     Material is a musical work, performance, or sound recording,
+     Adapted Material is always produced where the Licensed Material is
+     synched in timed relation with a moving image.
+ .
+  b. Adapter's License means the license You apply to Your Copyright
+     and Similar Rights in Your contributions to Adapted Material in
+     accordance with the terms and conditions of this Public License.
+ .
+  c. BY-SA Compatible License means a license listed at
+     creativecommons.org/compatiblelicenses, approved by Creative
+     Commons as essentially the equivalent of this Public License.
+ .
+  d. Copyright and Similar Rights means copyright and/or similar rights
+     closely related to copyright including, without limitation,
+     performance, broadcast, sound recording, and Sui Generis Database
+     Rights, without regard to how the rights are labeled or
+     categorized. For purposes of this Public License, the rights
+     specified in Section 2(b)(1)-(2) are not Copyright and Similar
+     Rights.
+ .
+  e. Effective Technological Measures means those measures that, in the
+     absence of proper authority, may not be circumvented under laws
+     fulfilling obligations under Article 11 of the WIPO Copyright
+     Treaty adopted on December 20, 1996, and/or similar international
+     agreements.
+ .
+  f. Exceptions and Limitations means fair use, fair dealing, and/or
+     any other exception or limitation to Copyright and Similar Rights
+     that applies to Your use of the Licensed Material.
+ .
+  g. License Elements means the license attributes listed in the name
+     of a Creative Commons Public License. The License Elements of this
+     Public License are Attribution and ShareAlike.
+ .
+  h. Licensed Material means the artistic or literary work, database,
+     or other material to which the Licensor applied this Public
+     License.
+ .
+  i. Licensed Rights means the rights granted to You subject to the
+     terms and conditions of this Public License, which are limited to
+     all Copyright and Similar Rights that apply to Your use of the
+     Licensed Material and that the Licensor has authority to license.
+ .
+  j. Licensor means the individual(s) or entity(ies) granting rights
+     under this Public License.
+ .
+  k. Share means to provide material to the public by any means or
+     process that requires permission under the Licensed Rights, such
+     as reproduction, public display, public performance, distribution,
+     dissemination, communication, or importation, and to make material
+     available to the public including in ways that members of the
+     public may access the material from a place and at a time
+     individually chosen by them.
+ .
+  l. Sui Generis Database Rights means rights other than copyright
+     resulting from Directive 96/9/EC of the European Parliament and of
+     the Council of 11 March 1996 on the legal protection of databases,
+     as amended and/or succeeded, as well as other essentially
+     equivalent rights anywhere in the world.
+ .
+  m. You means the individual or entity exercising the Licensed Rights
+     under this Public License. Your has a corresponding meaning.
+ .
+ .
+ Section 2 -- Scope.
+ .
+  a. License grant.
+ .
+       1. Subject to the terms and conditions of this Public License,
+          the Licensor hereby grants You a worldwide, royalty-free,
+          non-sublicensable, non-exclusive, irrevocable license to
+          exercise the Licensed Rights in the Licensed Material to:
+ .
+            a. reproduce and Share the Licensed Material, in whole or
+               in part; and
+ .
+            b. produce, reproduce, and Share Adapted Material.
+ .
+       2. Exceptions and Limitations. For the avoidance of doubt, where
+          Exceptions and Limitations apply to Your use, this Public
+          License does not apply, and You do not need to comply with
+          its terms and conditions.
+ .
+       3. Term. The term of this Public License is specified in Section
+          6(a).
+ .
+       4. Media and formats; technical modifications allowed. The
+          Licensor authorizes You to exercise the Licensed Rights in
+          all media and formats whether now known or hereafter created,
+          and to make technical modifications necessary to do so. The
+          Licensor waives and/or agrees not to assert any right or
+          authority to forbid You from making technical modifications
+          necessary to exercise the Licensed Rights, including
+          technical modifications necessary to circumvent Effective
+          Technological Measures. For purposes of this Public License,
+          simply making modifications authorized by this Section 2(a)
+          (4) never produces Adapted Material.
+ .
+       5. Downstream recipients.
+ .
+            a. Offer from the Licensor -- Licensed Material. Every
+               recipient of the Licensed Material automatically
+               receives an offer from the Licensor to exercise the
+               Licensed Rights under the terms and conditions of this
+               Public License.
+ .
+            b. Additional offer from the Licensor -- Adapted Material.
+               Every recipient of Adapted Material from You
+               automatically receives an offer from the Licensor to
+               exercise the Licensed Rights in the Adapted Material
+               under the conditions of the Adapter's License You apply.
+ .
+            c. No downstream restrictions. You may not offer or impose
+               any additional or different terms or conditions on, or
+               apply any Effective Technological Measures to, the
+               Licensed Material if doing so restricts exercise of the
+               Licensed Rights by any recipient of the Licensed
+               Material.
+ .
+       6. No endorsement. Nothing in this Public License constitutes or
+          may be construed as permission to assert or imply that You
+          are, or that Your use of the Licensed Material is, connected
+          with, or sponsored, endorsed, or granted official status by,
+          the Licensor or others designated to receive attribution as
+          provided in Section 3(a)(1)(A)(i).
+ .
+  b. Other rights.
+ .
+       1. Moral rights, such as the right of integrity, are not
+          licensed under this Public License, nor are publicity,
+          privacy, and/or other similar personality rights; however, to
+          the extent possible, the Licensor waives and/or agrees not to
+          assert any such rights held by the Licensor to the limited
+          extent necessary to allow You to exercise the Licensed
+          Rights, but not otherwise.
+ .
+       2. Patent and trademark rights are not licensed under this
+          Public License.
+ .
+       3. To the extent possible, the Licensor waives any right to
+          collect royalties from You for the exercise of the Licensed
+          Rights, whether directly or through a collecting society
+          under any voluntary or waivable statutory or compulsory
+          licensing scheme. In all other cases the Licensor expressly
+          reserves any right to collect such royalties.
+ .
+ .
+ Section 3 -- License Conditions.
+ .
+ Your exercise of the Licensed Rights is expressly made subject to the
+ following conditions.
+ .
+  a. Attribution.
+ .
+       1. If You Share the Licensed Material (including in modified
+          form), You must:
+ .
+            a. retain the following if it is supplied by the Licensor
+               with the Licensed Material:
+ .
+                 i. identification of the creator(s) of the Licensed
+                    Material and any others designated to receive
+                    attribution, in any reasonable manner requested by
+                    the Licensor (including by pseudonym if
+                    designated);
+ .
+                ii. a copyright notice;
+ .
+               iii. a notice that refers to this Public License;
+ .
+                iv. a notice that refers to the disclaimer of
+                    warranties;
+ .
+                 v. a URI or hyperlink to the Licensed Material to the
+                    extent reasonably practicable;
+ .
+            b. indicate if You modified the Licensed Material and
+               retain an indication of any previous modifications; and
+ .
+            c. indicate the Licensed Material is licensed under this
+               Public License, and include the text of, or the URI or
+               hyperlink to, this Public License.
+ .
+       2. You may satisfy the conditions in Section 3(a)(1) in any
+          reasonable manner based on the medium, means, and context in
+          which You Share the Licensed Material. For example, it may be
+          reasonable to satisfy the conditions by providing a URI or
+          hyperlink to a resource that includes the required
+          information.
+ .
+       3. If requested by the Licensor, You must remove any of the
+          information required by Section 3(a)(1)(A) to the extent
+          reasonably practicable.
+ .
+  b. ShareAlike.
+ .
+     In addition to the conditions in Section 3(a), if You Share
+     Adapted Material You produce, the following conditions also apply.
+ .
+       1. The Adapter's License You apply must be a Creative Commons
+          license with the same License Elements, this version or
+          later, or a BY-SA Compatible License.
+ .
+       2. You must include the text of, or the URI or hyperlink to, the
+          Adapter's License You apply. You may satisfy this condition
+          in any reasonable manner based on the medium, means, and
+          context in which You Share Adapted Material.
+ .
+       3. You may not offer or impose any additional or different terms
+          or conditions on, or apply any Effective Technological
+          Measures to, Adapted Material that restrict exercise of the
+          rights granted under the Adapter's License You apply.
+ .
+ .
+ Section 4 -- Sui Generis Database Rights.
+ .
+ Where the Licensed Rights include Sui Generis Database Rights that
+ apply to Your use of the Licensed Material:
+ .
+  a. for the avoidance of doubt, Section 2(a)(1) grants You the right
+     to extract, reuse, reproduce, and Share all or a substantial
+     portion of the contents of the database;
+ .
+  b. if You include all or a substantial portion of the database
+     contents in a database in which You have Sui Generis Database
+     Rights, then the database in which You have Sui Generis Database
+     Rights (but not its individual contents) is Adapted Material,
+ .
+     including for purposes of Section 3(b); and
+  c. You must comply with the conditions in Section 3(a) if You Share
+     all or a substantial portion of the contents of the database.
+ .
+ For the avoidance of doubt, this Section 4 supplements and does not
+ replace Your obligations under this Public License where the Licensed
+ Rights include other Copyright and Similar Rights.
+ .
+ .
+ Section 5 -- Disclaimer of Warranties and Limitation of Liability.
+ .
+  a. UNLESS OTHERWISE SEPARATELY UNDERTAKEN BY THE LICENSOR, TO THE
+     EXTENT POSSIBLE, THE LICENSOR OFFERS THE LICENSED MATERIAL AS-IS
+     AND AS-AVAILABLE, AND MAKES NO REPRESENTATIONS OR WARRANTIES OF
+     ANY KIND CONCERNING THE LICENSED MATERIAL, WHETHER EXPRESS,
+     IMPLIED, STATUTORY, OR OTHER. THIS INCLUDES, WITHOUT LIMITATION,
+     WARRANTIES OF TITLE, MERCHANTABILITY, FITNESS FOR A PARTICULAR
+     PURPOSE, NON-INFRINGEMENT, ABSENCE OF LATENT OR OTHER DEFECTS,
+     ACCURACY, OR THE PRESENCE OR ABSENCE OF ERRORS, WHETHER OR NOT
+     KNOWN OR DISCOVERABLE. WHERE DISCLAIMERS OF WARRANTIES ARE NOT
+     ALLOWED IN FULL OR IN PART, THIS DISCLAIMER MAY NOT APPLY TO YOU.
+ .
+  b. TO THE EXTENT POSSIBLE, IN NO EVENT WILL THE LICENSOR BE LIABLE
+     TO YOU ON ANY LEGAL THEORY (INCLUDING, WITHOUT LIMITATION,
+     NEGLIGENCE) OR OTHERWISE FOR ANY DIRECT, SPECIAL, INDIRECT,
+     INCIDENTAL, CONSEQUENTIAL, PUNITIVE, EXEMPLARY, OR OTHER LOSSES,
+     COSTS, EXPENSES, OR DAMAGES ARISING OUT OF THIS PUBLIC LICENSE OR
+     USE OF THE LICENSED MATERIAL, EVEN IF THE LICENSOR HAS BEEN
+     ADVISED OF THE POSSIBILITY OF SUCH LOSSES, COSTS, EXPENSES, OR
+     DAMAGES. WHERE A LIMITATION OF LIABILITY IS NOT ALLOWED IN FULL OR
+     IN PART, THIS LIMITATION MAY NOT APPLY TO YOU.
+ .
+  c. The disclaimer of warranties and limitation of liability provided
+     above shall be interpreted in a manner that, to the extent
+     possible, most closely approximates an absolute disclaimer and
+     waiver of all liability.
+ .
+ .
+ Section 6 -- Term and Termination.
+ .
+  a. This Public License applies for the term of the Copyright and
+     Similar Rights licensed here. However, if You fail to comply with
+     this Public License, then Your rights under this Public License
+     terminate automatically.
+ .
+  b. Where Your right to use the Licensed Material has terminated under
+     Section 6(a), it reinstates:
+ .
+       1. automatically as of the date the violation is cured, provided
+          it is cured within 30 days of Your discovery of the
+          violation; or
+ .
+       2. upon express reinstatement by the Licensor.
+ .
+     For the avoidance of doubt, this Section 6(b) does not affect any
+     right the Licensor may have to seek remedies for Your violations
+     of this Public License.
+ .
+  c. For the avoidance of doubt, the Licensor may also offer the
+     Licensed Material under separate terms or conditions or stop
+     distributing the Licensed Material at any time; however, doing so
+     will not terminate this Public License.
+ .
+  d. Sections 1, 5, 6, 7, and 8 survive termination of this Public
+     License.
+ .
+ .
+ Section 7 -- Other Terms and Conditions.
+ .
+  a. The Licensor shall not be bound by any additional or different
+     terms or conditions communicated by You unless expressly agreed.
+ .
+  b. Any arrangements, understandings, or agreements regarding the
+     Licensed Material not stated herein are separate from and
+     independent of the terms and conditions of this Public License.
+ .
+ .
+ Section 8 -- Interpretation.
+ .
+  a. For the avoidance of doubt, this Public License does not, and
+     shall not be interpreted to, reduce, limit, restrict, or impose
+     conditions on any use of the Licensed Material that could lawfully
+     be made without permission under this Public License.
+ .
+  b. To the extent possible, if any provision of this Public License is
+     deemed unenforceable, it shall be automatically reformed to the
+     minimum extent necessary to make it enforceable. If the provision
+     cannot be reformed, it shall be severed from this Public License
+     without affecting the enforceability of the remaining terms and
+     conditions.
+ .
+  c. No term or condition of this Public License will be waived and no
+     failure to comply consented to unless expressly agreed to by the
+     Licensor.
+ .
+  d. Nothing in this Public License constitutes or may be interpreted
+     as a limitation upon, or waiver of, any privileges and immunities
+     that apply to the Licensor or You, including from the legal
+     processes of any jurisdiction or authority.
+ .
+ .
+ =======================================================================
+ .
+ Creative Commons is not a party to its public licenses.
+ Notwithstanding, Creative Commons may elect to apply one of its public
+ licenses to material it publishes and in those instances will be
+ considered the "Licensor." Except for the limited purpose of indicating
+ that material is shared under a Creative Commons public license or as
+ otherwise permitted by the Creative Commons policies published at
+ creativecommons.org/policies, Creative Commons does not authorize the
+ use of the trademark "Creative Commons" or any other trademark or logo
+ of Creative Commons without its prior written consent including,
+ without limitation, in connection with any unauthorized modifications
+ to any of its public licenses or any other arrangements,
+ understandings, or agreements concerning use of licensed material. For
+ the avoidance of doubt, this paragraph does not form part of the public
+ licenses.
+ .
+ Creative Commons may be contacted at creativecommons.org.
+
+License: GPL-2+
+ This package is free software; you can redistribute it and/or modify
+ it under the terms of the GNU General Public License as published by
+ the Free Software Foundation; either version 2 of the License, or
+ (at your option) any later version.
+ .
+ This package is distributed in the hope that it will be useful,
+ but WITHOUT ANY WARRANTY; without even the implied warranty of
+ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ GNU General Public License for more details.
+ .
+ You should have received a copy of the GNU General Public License
+ along with this program. If not, see <http://www.gnu.org/licenses/>
+ .
+ On Debian systems, the complete text of the GNU General
+ Public License version 2 can be found in "/usr/share/common-licenses/GPL-2".
+
+License: LGPL
+ This file may be redistributed under the terms of the
+ GNU Lesser General Public License.
+ .
+ On Debian systems, the complete text of the GNU Lesser General Public
+ License can be found in ‘/usr/share/common-licenses/LGPL’.
+
+License: LGPL-2+
+ This package is free software; you can redistribute it and/or modify it
+ under the terms of the GNU Lesser General Public License as published
+ by the Free Software Foundation; either version 2 of the License, or
+ (at your option) any later version.
+ .
+ This package is distributed in the hope that it will be useful,
+ but WITHOUT ANY WARRANTY; without even the implied warranty of
+ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU Lesser
+ General Public License for more details.
+ .
+ You should have received a copy of the GNU Lesser General Public License
+ along with this package; if not, see http://www.gnu.org/licenses/.
+ .
+ On Debian GNU/Linux systems, the complete text of the GNU Lesser General
+ Public License can be found in `/usr/share/common-licenses/LGPL'.
+
+License: LGPL-2.1+
+ This library is free software; you can redistribute it and/or
+ modify it under the terms of the GNU Lesser General Public
+ License as published by the Free Software Foundation; either
+ version 2.1 of the License, or (at your option) any later version.
+ .
+ This library is distributed in the hope that it will be useful,
+ but WITHOUT ANY WARRANTY; without even the implied warranty of
+ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+ Lesser General Public License for more details.
+ .
+ You should have received a copy of the GNU General Public License
+ along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ .
+ On Debian systems, the complete text of the GNU Lesser General Public License
+ version 2.1 can be found in "/usr/share/common-licenses/LGPL-2.1".
+
+License: MIT
+ Permission is hereby granted, free of charge, to any person obtaining a copy
+ of this software and associated documentation files (the "Software"), to deal
+ in the Software without restriction, including without limitation the rights
+ to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ copies of the Software, and to permit persons to whom the Software is
+ furnished to do so, subject to the following conditions:
+ .
+ The above copyright notice and this permission notice shall be included in
+ all copies or substantial portions of the Software.
+ .
+ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+ THE SOFTWARE.
+
+License: public-domain
+ The files tagged with this license contains the following paragraphs:
+ .
+ No copyright is claimed.  This code is in the public domain; do with
+ it what you wish.
+ .
+ Written by Karel Zak <kzak@redhat.com>
+ Public License can be found in `/usr/share/common-licenses/LGPL'.

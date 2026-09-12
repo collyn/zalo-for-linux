@@ -122,24 +122,15 @@ const WINE_DOWNLOAD_URL_CLASSIC =
   'https://github.com/Kron4ek/Wine-Builds/releases/download/11.17/wine-11.17-amd64.tar.xz';
 
 // GStreamer packages bundled for the Full variant (64-bit, Ubuntu jammy so
-// the glibc floor is 2.35 — Ubuntu 22.04/Mint 21+). v4l2src (plugins-good)
-// is what wine's winegstreamer uses for the webcam; libav supplies H.264.
+// the glibc floor is 2.35 — Ubuntu 22.04/Mint 21+). The 64-bit tree now
+// serves ONLY the Wayland screen-share bridge
+// (pipewiresrc ! videoconvert ! ximagesink) — call media runs on the
+// bundled i386 stack (zcall-bridge/gst-i386) since only classic wine is
+// supported. libav/plugins-good/blas/lapack were the old wow64 call path:
+// dropped, they were the bulk of the tree.
 const GST_PACKAGES = [
   'libgstreamer1.0-0',
-  'libgstreamer-plugins-base1.0-0',
-  'gstreamer1.0-plugins-good',
-  // plugins-bad intentionally omitted: libav covers decode/encode (see
-  // README) and bad pulls heavy deps (libblas3, libavfilter, ...). The ONE
-  // exception is pipewiresrc for the Wayland bridge — fetched alone in
-  // phase 3, never as part of the closure.
-  'gstreamer1.0-libav',
-  'libv4l-0',
-  // libavcodec58 hard-depends libblas3/liblapack3 via ALTERNATIVE deps
-  // (libblas3 | libatlas3-base | libopenblas-base) — resolution differs by
-  // container state, so pin them explicitly or fresh caches miss them and
-  // the ldd gate fails on libgstlibav.so.
-  'libblas3',
-  'liblapack3',
+  'libgstreamer-plugins-base1.0-0', // videoconvert
   // glib dlopens libpcre for regex — a Recommends, so --no-install-recommends
   // drops it; the gst-plugin-scanner links it directly.
   'libpcre3',
@@ -152,24 +143,16 @@ const GST_PACKAGES = [
 // allowlist below.
 const BRIDGE_X_PACKAGES = [
   'xvfb', 'xserver-common', 'xkb-data', 'xauth', 'x11-xkb-utils', 'xdotool',
-  'gstreamer1.0-tools', // gst-launch-1.0 + gst-inspect-1.0
+  'gstreamer1.0-tools', // gst-launch-1.0 — screenbridge.py launches the pipeline with it
   // Debian splits the X-dependent plugins (ximagesink/xvimagesink) out of
   // plugins-base into gstreamer1.0-x.
   'gstreamer1.0-x',
 ];
 
-// python3 + dbus/gir ARE installed in the base image (apt needs python3), so
-// `install --download-only` would skip them — `--reinstall` forces the fetch.
-// Listed explicitly, no recommends.
-const PY_PACKAGES = [
-  'python3.10-minimal', 'libpython3.10-minimal', 'libpython3.10-stdlib',
-  'python3.10', 'python3-minimal', 'python3',
-  'python3-dbus', 'python3-gi',
-  // NOTE: gir1.2-girepository-2.0 does NOT exist in jammy — the
-  // girepository typelib ships inside libgirepository-1.0-1 there.
-  'gir1.2-glib-2.0',
-  'libgirepository-1.0-1', 'libffi8', 'libexpat1', 'libmpdec3', 'libdbus-1-3',
-];
+// python3 is NOT bundled anymore: screenbridge.py runs on the HOST python3
+// (every desktop distro ships it; the app checks python3-dbus/python3-gi and
+// shows an install dialog when missing). The bundled python closure was
+// ~20-25MB of the tree — see bridgeTools() in the plugin for the host side.
 
 // Pipewiresrc: Ubuntu ships it in a DEDICATED package (gstreamer1.0-pipewire,
 // 150KB, contains exactly libgstpipewire.so) — NOT in plugins-bad, whose
@@ -254,7 +237,6 @@ const RUNTIME_MARKERS = [
   'usr/lib/x86_64-linux-gnu/gstreamer-1.0/libgstpipewire.so',
   'usr/lib/x86_64-linux-gnu/gstreamer-1.0/libgstximagesink.so',
   'usr/bin/Xvfb',
-  'usr/bin/python3',
 ];
 
 async function bundleGstRuntime() {
@@ -267,7 +249,7 @@ async function bundleGstRuntime() {
   // libblas3/liblapack3 joined the set) silently satisfy the skip gates and
   // fail the ldd gate forever. The stamp is written into the tree by the
   // fetch script itself; anything else = stale = rebuild.
-  const ALL_PACKAGES = GST_PACKAGES.concat(BRIDGE_X_PACKAGES, PY_PACKAGES, PW_PACKAGES, ['libpcre3']);
+  const ALL_PACKAGES = GST_PACKAGES.concat(BRIDGE_X_PACKAGES, PW_PACKAGES, ['libpcre3']);
   const script = [
     'set -e',
     'export DEBIAN_FRONTEND=noninteractive',
@@ -278,8 +260,8 @@ async function bundleGstRuntime() {
     'apt-get -o Acquire::ForceIPv4=true update -qq',
     // Fresh extract, but KEEP /out/cache: CI restores the deb cache there
     // and apt re-uses it (matching checksums skip the re-download).
-    'rm -rf /out/root /out/cache-py /out/cache-pw',
-    'mkdir -p /out/cache/partial /out/cache-py /out/cache-pw /out/root',
+    'rm -rf /out/root /out/cache-pw',
+    'mkdir -p /out/cache/partial /out/cache-pw /out/root',
     // Silences "Download is performed unsandboxed as root" noise; IPv4-only
     // for the same CI speed reason as the update above.
     'APT() { apt-get -o APT::Sandbox::User=root -o Acquire::ForceIPv4=true "$@"; }',
@@ -293,13 +275,7 @@ async function bundleGstRuntime() {
     // it — pull it explicitly (download ignores Dir::Cache::archives, so
     // run it from inside the cache dir).
     'cd /out/cache && APT download libpcre3 && cd /out',
-    // ---- Phase 2: python closure. python3 IS installed in the base image,
-    // ---- so plain download-only would skip it: --reinstall forces the
-    // ---- re-download of the NAMED installed packages; uninstalled deps
-    // ---- fetch normally.
-    'APT -o Dir::Cache::archives=/out/cache-py install -y -qq ' +
-      '--reinstall --download-only --no-install-recommends ' + PY_PACKAGES.join(' '),
-    // ---- Phase 3: pipewiresrc, NO closure — the explicit list below
+    // ---- Phase 2: pipewiresrc, NO closure — the explicit list below
     // ---- (gstreamer1.0-pipewire contains exactly the plugin .so).
     'cd /out/cache-pw && APT download ' + PW_PACKAGES.join(' ') + ' && cd /out',
     // ---- Deterministic extraction: only debs belonging to the CURRENT
@@ -340,13 +316,13 @@ async function bundleGstRuntime() {
     // exceed the CI step timeout on cold caches.
     'missing=""',
     'for p in $(cat /out/keep.txt); do',
-    '  ls /out/cache/${p}_*.deb /out/cache-py/${p}_*.deb /out/cache-pw/${p}_*.deb >/dev/null 2>&1 || missing="$missing $p";',
+    '  ls /out/cache/${p}_*.deb /out/cache-pw/${p}_*.deb >/dev/null 2>&1 || missing="$missing $p";',
     'done',
     // One availability check for the whole missing set (filters virtuals),
     // then ONE download invocation for all real packages.
     'avail=$(apt-cache show $missing 2>/dev/null | grep "^Package: " | awk \'{print $2}\' | sort -u)',
     'if [ -n "$avail" ]; then (cd /out/cache && APT download $avail); fi',
-    'for f in /out/cache/*.deb /out/cache-py/*.deb /out/cache-pw/*.deb; do',
+    'for f in /out/cache/*.deb /out/cache-pw/*.deb; do',
     '  n=$(dpkg-deb -f "$f" Package 2>/dev/null || true)',
     '  if grep -qxF "$n" /out/keep.txt; then dpkg-deb -x "$f" /out/root; fi',
     'done',
@@ -524,12 +500,9 @@ async function bundleGstRuntime() {
 
   const EXISTENCE_GATE = [
     ['usr/lib/x86_64-linux-gnu', 'libgstreamer-1.0.so.0'],
-    ['usr/lib/x86_64-linux-gnu', 'gstreamer-1.0/libgstvideo4linux2.so'],
-    ['usr/lib/x86_64-linux-gnu', 'gstreamer-1.0/libgstlibav.so'],
     ['usr/lib/x86_64-linux-gnu', 'gstreamer-1.0/libgstpipewire.so'],  // cherry-picked
     ['usr/bin', 'Xvfb'], ['usr/bin', 'gst-launch-1.0'], ['usr/bin', 'gst-inspect-1.0'],
-    ['usr/bin', 'python3'], ['usr/bin', 'python3.10'], ['usr/bin', 'xdotool'],
-    ['usr/lib/python3.10', 'os.py'],     // stdlib actually extracted
+    ['usr/bin', 'xdotool'],
   ];
   for (const [base, f] of EXISTENCE_GATE) {
     if (!fs.existsSync(path.join(target, base, f))) {
@@ -552,24 +525,12 @@ async function bundleGstRuntime() {
   //  - The PW_STRIP family (HOST_PW set): the bridge uses the host
   //    pipewire stack (see the PW_STRIP comment).
   const LDD_GATE = [
-    'libgstreamer-1.0.so.0', 'gstreamer-1.0/libgstvideo4linux2.so',
-    'gstreamer-1.0/libgstlibav.so', 'gstreamer-1.0/libgstpipewire.so',
+    'libgstreamer-1.0.so.0', 'gstreamer-1.0/libgstpipewire.so',
     '../../bin/Xvfb', '../../bin/gst-launch-1.0',
-    '../../bin/gst-inspect-1.0', '../../bin/xdotool', '../../bin/python3.10',
+    '../../bin/gst-inspect-1.0', '../../bin/xdotool',
   ];
   try {
-    // python C-extensions live under usr/lib/python3/dist-packages (NOT the
-    // multiarch dir) — resolve their real names by readdir.
-    const pyMods = [];
-    for (const pat of ['_dbus_bindings*.so', 'gi/_gi*.so']) {
-      const dir = path.join(target, 'usr', 'lib', 'python3', 'dist-packages', path.dirname(pat));
-      let entries = [];
-      try { entries = fs.readdirSync(dir); } catch (e) { continue; }
-      for (const e of entries) {
-        if (e.startsWith(path.basename(pat).split('*')[0])) pyMods.push(path.join(dir, e));
-      }
-    }
-    const lddFiles = LDD_GATE.map((f) => path.join(libDir, f)).concat(pyMods);
+    const lddFiles = LDD_GATE.map((f) => path.join(libDir, f));
     // Resolutions allowed to come from the HOST: glibc core (never bundled —
     // the container already ships libc) and Xvfb's GL trio. EVERYTHING else
     // must resolve INSIDE libDir — a host-ld.so.cache fallback (e.g. host
@@ -599,9 +560,7 @@ async function bundleGstRuntime() {
     const missing = [];
     let lddToolMissing = false;
     for (const f of lddFiles) {
-      // pyMods entries are absolute already; path.join does NOT reset on
-      // absolute segments, so a naive join would DOUBLE the prefix.
-      const full = path.isAbsolute(f) ? f : path.join(libDir, f);
+      const full = path.join(libDir, f);
       if (!fs.existsSync(full)) {
         // Hard defect: a gate target is absent even though the existence
         // gate passed moments ago — dump everything to pinpoint it.
@@ -667,7 +626,7 @@ async function bundleGstRuntime() {
       } catch (e) { diag.push('diag error: ' + e.message); }
       throw new Error('gst bundle has unresolved deps:\n' + missing.join('\n') + '\n' + diag.join('\n'));
     }
-    logger.dim('gst bundle deps self-contained (' + (LDD_GATE.length + pyMods.length) + ' files checked)');
+    logger.dim('gst bundle deps self-contained (' + LDD_GATE.length + ' files checked)');
   } catch (e) {
     if (/unresolved deps|ldd gate target missing|ldd failed on/.test(String(e.message || ''))) throw e;
     logger.warn('ldd dep check skipped (ldd unavailable): ' + String(e.message).slice(-120));
@@ -687,37 +646,12 @@ async function bundleGstRuntime() {
     ].join('\n'));
     execSync(`gcc "${probe}" -ldl -o "${stage}/dlopen-probe" && ` +
       `LD_LIBRARY_PATH="${libDir}" "${stage}/dlopen-probe" ` +
-      `"${libDir}/gstreamer-1.0/libgstvideo4linux2.so" "${libDir}/gstreamer-1.0/libgstlibav.so" ` +
       `"${libDir}/gstreamer-1.0/libgstpipewire.so"`, {
       cwd: BASE_DIR, stdio: 'pipe', timeout: 60000
     });
-    logger.dim('gst bundle verified (video4linux2 + libav + pipewire dlopen with RTLD_NOW)');
+    logger.dim('gst bundle verified (pipewire plugin dlopen with RTLD_NOW)');
   } catch (e) {
     logger.warn('gst plugin dlopen check skipped/failed: ' + String(e.stderr || e.message).trim().slice(-300));
-  }
-
-  // ---- Gate (b): bundled python must import dbus + gi against the bundled
-  // ---- tree (HARD — a failure here breaks the whole bridge on user machines).
-  try {
-    const pyEnv = {
-      PATH: process.env.PATH || '/usr/bin:/bin',
-      LD_LIBRARY_PATH: libDir,
-      PYTHONHOME: target + '/usr',
-      PYTHONPATH: [
-        target + '/usr/lib/python3.10',
-        target + '/usr/lib/python3.10/lib-dynload',
-        target + '/usr/lib/python3/dist-packages',
-      ].join(':'),
-      PYTHONNOUSERSITE: '1',
-      GI_TYPELIB_PATH: libDir + '/girepository-1.0',
-    };
-    execSync(`"${target}/usr/bin/python3.10" -c "import dbus; import dbus.mainloop.glib; from gi.repository import GLib; print('py-ok')"`, {
-      cwd: BASE_DIR, stdio: 'pipe', timeout: 60000, env: pyEnv
-    });
-    logger.dim('gate (b): bundled python imports dbus + gi OK');
-  } catch (e) {
-    throw new Error('gate (b) FAILED — bundled python cannot import dbus/gi:\n' +
-      String(e.stderr || e.message).trim().slice(-500));
   }
 
   // ---- Gate (c): bundled gst-inspect must register the bridge elements
