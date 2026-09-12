@@ -150,6 +150,7 @@ const REPLACEMENTS = [
   //     a bundled i386 GStreamer stack, so these entries strip the old
   //     trigger code back out and fold the i386 GST env into the spawn.
   {
+    optional: true,
     // migrate builds that carry the old spawn-time trigger version down
     // to the exit-unlink form first (NOTE: `to` puts the exit handler
     // FIRST — the natural error+exit order would be a prefix substring
@@ -171,11 +172,13 @@ const REPLACEMENTS = [
     remove: ',CT(t)',
   },
   {
+    optional: true,
     // migrate the callState-free trigger removal back to the original form
     from: 'else (S.webContents.send("call-update",e.command,e.data),"callState"===e.command&&e.data&&"free"===e.data.state&&CF());break;',
     to: 'else S.webContents.send("call-update",e.command,e.data);break;',
   },
   {
+    optional: true,
     // migrate the no-cross-append env: when BOTH gst branches were set
     // the 64-bit branch overwrote the i386 LD_LIBRARY_PATH and classic
     // wine fell back to the host 32-bit gst (camera bug on Full builds)
@@ -183,6 +186,7 @@ const REPLACEMENTS = [
     to: '[e,"\\\\\\\\.\\\\pipe\\\\PipeZCallRecv","\\\\\\\\.\\\\pipe\\\\PipeZCallSend"],{env:Object.assign({},process.env,{LD_PRELOAD:process.env.ZCALL_PROXY_SO||process.env.LD_PRELOAD||""},process.env.ZCALL_GST_RUNTIME_I386?{LD_LIBRARY_PATH:process.env.ZCALL_GST_RUNTIME_I386+(process.env.LD_LIBRARY_PATH?":"+process.env.LD_LIBRARY_PATH:""),GST_PLUGIN_PATH:process.env.ZCALL_GST_RUNTIME_I386+"/gstreamer-1.0",GST_PLUGIN_SYSTEM_PATH:process.env.ZCALL_GST_RUNTIME_I386+"/system",GST_REGISTRY:process.env.ZCALL_GST_REGISTRY||""}:null)}))',
   },
   {
+    optional: true,
     // migrate the cross-append env down to the i386-only form: the
     // 64-bit call branch is retired — only classic wine is supported
     // and the 64-bit gst-runtime now serves the screen bridge alone
@@ -250,7 +254,13 @@ async function main() {
     }
     const count = content.split(from).length - 1;
     if (count === 0) {
-      logger.warn('call-v2 pattern not found: ' + from.slice(0, 60) + '...');
+      // optional entries migrate OLD patched builds — on a fresh main.js
+      // their absence is the EXPECTED case, not a defect.
+      if (entry.optional) {
+        logger.dim('call-v2 migration not needed: ' + from.slice(0, 60) + '...');
+      } else {
+        logger.warn('call-v2 pattern not found: ' + from.slice(0, 60) + '...');
+      }
       continue;
     }
     content = content.split(from).join(to);
