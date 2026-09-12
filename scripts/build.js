@@ -130,7 +130,8 @@ const WINE_DOWNLOAD_URL_CLASSIC =
 // dropped, they were the bulk of the tree.
 const GST_PACKAGES = [
   'libgstreamer1.0-0',
-  'libgstreamer-plugins-base1.0-0', // videoconvert
+  'libgstreamer-plugins-base1.0-0', // libgstvideo/libgstbase — the libs the plugins link
+  'gstreamer1.0-plugins-base',      // the plugin .so files (videoconvert, …)
   // glib dlopens libpcre for regex — a Recommends, so --no-install-recommends
   // drops it; the gst-plugin-scanner links it directly.
   'libpcre3',
@@ -501,6 +502,10 @@ async function bundleGstRuntime() {
   const EXISTENCE_GATE = [
     ['usr/lib/x86_64-linux-gnu', 'libgstreamer-1.0.so.0'],
     ['usr/lib/x86_64-linux-gnu', 'gstreamer-1.0/libgstpipewire.so'],  // cherry-picked
+    // videoconvert guards the plugins-base PLUGIN package specifically — a
+    // package-set regression (libs present, plugin .so files absent) fails
+    // HERE instead of deep in gate (c).
+    ['usr/lib/x86_64-linux-gnu', 'gstreamer-1.0/libgstvideoconvert.so'],
     ['usr/bin', 'Xvfb'], ['usr/bin', 'gst-launch-1.0'], ['usr/bin', 'gst-inspect-1.0'],
     ['usr/bin', 'xdotool'],
   ];
@@ -526,6 +531,7 @@ async function bundleGstRuntime() {
   //    pipewire stack (see the PW_STRIP comment).
   const LDD_GATE = [
     'libgstreamer-1.0.so.0', 'gstreamer-1.0/libgstpipewire.so',
+    'gstreamer-1.0/libgstvideoconvert.so',
     '../../bin/Xvfb', '../../bin/gst-launch-1.0',
     '../../bin/gst-inspect-1.0', '../../bin/xdotool',
   ];
@@ -649,10 +655,11 @@ async function bundleGstRuntime() {
     ].join('\n'));
     execSync(`gcc "${probe}" -ldl -o "${stage}/dlopen-probe" && ` +
       `LD_LIBRARY_PATH="${libDir}" "${stage}/dlopen-probe" ` +
-      `"${libDir}/gstreamer-1.0/libgstpipewire.so"`, {
+      `"${libDir}/gstreamer-1.0/libgstpipewire.so" ` +
+      `"${libDir}/gstreamer-1.0/libgstvideoconvert.so"`, {
       cwd: BASE_DIR, stdio: 'pipe', timeout: 60000
     });
-    logger.dim('gst bundle verified (pipewire plugin dlopen with RTLD_NOW)');
+    logger.dim('gst bundle verified (pipewire + videoconvert dlopen with RTLD_NOW)');
   } catch (e) {
     logger.warn('gst plugin dlopen check skipped/failed: ' + String(e.stderr || e.message).trim().slice(-300));
   }
