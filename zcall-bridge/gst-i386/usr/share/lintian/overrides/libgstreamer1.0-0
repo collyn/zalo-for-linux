@@ -1,2 +1,0 @@
-# gstreamer package naming vs major api release
-libgstreamer1.0-0: package-name-doesnt-match-sonames

@@ -3,4 +3,6 @@
 # them silently ships the AppImage WITHOUT the capture shim (share screen
 # dies, and ZaloCall runs without the preload the old releases had).
 # The shims are compiled by scripts/setup-zcall-bridge.js at build time.
-pycache
+__pycache__/
+gst-i386/
+*.so
